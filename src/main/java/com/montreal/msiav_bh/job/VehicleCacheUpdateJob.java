@@ -51,16 +51,45 @@ public class VehicleCacheUpdateJob {
             LocalDateTime startTime = LocalDateTime.now();
             log.info("==== INICIANDO JOB DE ATUALIZAÇÃO DO CACHE ====");
             log.info("Horário: {}", startTime.format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")));
+            log.info("Timezone: {}", java.time.ZoneId.systemDefault());
 
             try {
-                LocalDate endDate = LocalDate.now();
-                LocalDate startDate = endDate.minusDays(daysToFetch);
-
-                log.info("Período de busca: {} a {}", startDate, endDate);
-                log.info("Consultando API externa...");
-
-                List<ConsultaNotificationResponseDTO.NotificationData> notifications =
-                        apiQueryService.searchByPeriod(startDate, endDate);
+                // Tentar buscar dados de diferentes períodos até encontrar dados disponíveis
+                List<ConsultaNotificationResponseDTO.NotificationData> notifications = null;
+                LocalDate successfulStartDate = null;
+                LocalDate successfulEndDate = null;
+                
+                // Lista de períodos para tentar (do mais recente para o mais antigo)
+                LocalDate[][] periodsToTry = {
+                    {LocalDate.of(2025, 6, 1), LocalDate.of(2025, 6, 30)}, // Junho 2025
+                    {LocalDate.of(2025, 5, 1), LocalDate.of(2025, 5, 31)}, // Maio 2025
+                    {LocalDate.of(2025, 4, 1), LocalDate.of(2025, 4, 30)}, // Abril 2025
+                    {LocalDate.of(2025, 3, 1), LocalDate.of(2025, 3, 31)}, // Março 2025
+                };
+                
+                for (LocalDate[] period : periodsToTry) {
+                    LocalDate startDate = period[0];
+                    LocalDate endDate = period[1];
+                    
+                    log.info("Tentando período: {} a {}", startDate, endDate);
+                    
+                    try {
+                        notifications = apiQueryService.searchByPeriod(startDate, endDate);
+                        if (notifications != null && !notifications.isEmpty()) {
+                            log.info("Dados encontrados para o período: {} a {}", startDate, endDate);
+                            successfulStartDate = startDate;
+                            successfulEndDate = endDate;
+                            break;
+                        }
+                    } catch (Exception e) {
+                        log.warn("Erro ao buscar dados para período {} a {}: {}", startDate, endDate, e.getMessage());
+                    }
+                }
+                
+                if (notifications == null || notifications.isEmpty()) {
+                    log.warn("Nenhum dado encontrado em nenhum dos períodos tentados");
+                    return;
+                }
 
                 if (notifications != null && !notifications.isEmpty()) {
                     log.info("API retornou {} notificações", notifications.size());
@@ -68,7 +97,8 @@ public class VehicleCacheUpdateJob {
                     List<VehicleDTO> vehicles = vehicleInquiryMapper.mapToVeiculoDTO(notifications);
                     log.info("Convertidos para {} veículos únicos", vehicles.size());
 
-                    CacheUpdateContext context = CacheUpdateContext.scheduledRefresh(startDate, endDate);
+                    // Usar as datas do período que foi encontrado com sucesso
+                    CacheUpdateContext context = CacheUpdateContext.scheduledRefresh(successfulStartDate, successfulEndDate);
 
                     vehicleCacheService.updateCacheThreadSafe(vehicles, context);
 

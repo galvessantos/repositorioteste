@@ -76,8 +76,12 @@ public class ApiQueryService {
 
     public List<ConsultaNotificationResponseDTO.NotificationData> searchByPeriod(LocalDate startDate, LocalDate endDate) {
         String token = authenticate();
+        
         String url = config.getBaseUrl() + "/api/recepcaoContrato/periodo/"
                 + startDate.toString() + "/" + endDate.toString();
+
+        logger.info("Fazendo requisição para URL: {}", url);
+        logger.info("Data de início: {}, Data de fim: {}", startDate, endDate);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(token);
