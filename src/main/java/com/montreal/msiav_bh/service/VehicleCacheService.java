@@ -226,6 +226,11 @@ public class VehicleCacheService {
                     log.trace("Veículo atualizado por contrato/placa");
                 } else {
                     VehicleCache newEntity = vehicleCacheMapper.toEntity(dto, syncDate);
+                    if (newEntity.getContratoHash() == null && newEntity.getPlacaHash() == null) {
+                        log.debug("Ignorando insert: ambos hashes nulos (contrato/placa ausentes)");
+                        duplicateSkipped++;
+                        continue;
+                    }
                     vehicleCacheRepository.save(newEntity);
                     inserted++;
                     log.trace("Novo veículo inserido por contrato/placa");

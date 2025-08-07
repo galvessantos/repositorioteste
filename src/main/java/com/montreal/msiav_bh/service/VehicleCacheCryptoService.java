@@ -21,7 +21,7 @@ public class VehicleCacheCryptoService {
             return placa;
         }
 
-        String placaTrimmed = placa.toUpperCase().trim();
+        String placaTrimmed = normalizePlaca(placa);
 
         try {
             String encrypted = postgresCryptoUtil.encrypt(placaTrimmed);
@@ -64,7 +64,7 @@ public class VehicleCacheCryptoService {
             return contrato;
         }
 
-        String contratoTrimmed = contrato.trim();
+        String contratoTrimmed = normalizeContrato(contrato);
 
         try {
             String encrypted = postgresCryptoUtil.encrypt(contratoTrimmed);
@@ -105,7 +105,7 @@ public class VehicleCacheCryptoService {
         if (placa == null || placa.trim().isEmpty() || "N/A".equals(placa)) {
             return null;
         }
-        String normalized = placa.toUpperCase().trim();
+        String normalized = normalizePlaca(placa);
         return sha256Hex(normalized);
     }
 
@@ -113,7 +113,7 @@ public class VehicleCacheCryptoService {
         if (contrato == null || contrato.trim().isEmpty() || "N/A".equals(contrato)) {
             return null;
         }
-        String normalized = contrato.trim();
+        String normalized = normalizeContrato(contrato);
         return sha256Hex(normalized);
     }
 
@@ -139,5 +139,17 @@ public class VehicleCacheCryptoService {
         }
 
         return value.length() >= 50 && value.matches("[a-fA-F0-9]+");
+    }
+
+    private String normalizePlaca(String placa) {
+        String s = placa.toUpperCase().trim();
+        // remove tudo que não é letra/número
+        return s.replaceAll("[^A-Z0-9]", "");
+    }
+
+    private String normalizeContrato(String contrato) {
+        String s = contrato.trim();
+        // remover formatação (mantém apenas letras e números)
+        return s.replaceAll("[^A-Za-z0-9]", "");
     }
 }
