@@ -83,6 +83,8 @@ public class ApiQueryService {
         headers.setBearerAuth(token);
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
 
+        logger.debug("Fazendo requisição para URL: {}", url);
+        
         try {
             ResponseEntity<ConsultaNotificationResponseDTO> response = restTemplate.exchange(
                     url,
@@ -94,14 +96,31 @@ public class ApiQueryService {
             if (response.getStatusCode() == HttpStatus.OK &&
                     response.getBody() != null &&
                     response.getBody().success()) {
-                return response.getBody().data();
+                List<ConsultaNotificationResponseDTO.NotificationData> data = response.getBody().data();
+                logger.info("API retornou {} registros para o período {} a {}", 
+                           data != null ? data.size() : 0, startDate, endDate);
+                return data;
             }
-            logger.warn("Resposta inesperada: {}", response.getStatusCode());
+            
+            logger.warn("Resposta inesperada da API: Status={}, Body={}", 
+                       response.getStatusCode(), response.getBody());
+            
         } catch (HttpClientErrorException e) {
-            logger.error("Erro na requisição: {} - {}", e.getStatusCode(), e.getResponseBodyAsString());
+            if (e.getStatusCode() == HttpStatus.NOT_FOUND) {
+                logger.info("Período não encontrado na API: {} a {} - Erro: {}", 
+                           startDate, endDate, e.getResponseBodyAsString());
+            } else if (e.getStatusCode() == HttpStatus.UNAUTHORIZED) {
+                logger.warn("Token de autenticação inválido, tentando renovar...");
+                currentToken = null; // Force token renewal
+                // Could retry here if needed
+            } else {
+                logger.error("Erro na requisição: {} - URL: {} - Resposta: {}", 
+                            e.getStatusCode(), url, e.getResponseBodyAsString());
+            }
         } catch (Exception e) {
-            logger.error("Erro inesperado: ", e);
+            logger.error("Erro inesperado ao consultar período {} a {}: ", startDate, endDate, e);
         }
+        
         return List.of();
     }
 

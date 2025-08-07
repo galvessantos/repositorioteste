@@ -35,6 +35,12 @@ public class VehicleCacheUpdateJob {
     @Value("${vehicle.cache.update.days-to-fetch:30}")
     private int daysToFetch;
 
+    @Value("${vehicle.cache.update.fallback-days:60}")
+    private int fallbackDaysToFetch;
+
+    @Value("${vehicle.cache.update.max-historical-days:180}")
+    private int maxHistoricalDays;
+
     @Scheduled(fixedDelayString = "${vehicle.cache.update.interval:600000}")
     public void updateVehicleCache() {
         if (!jobLock.tryLock()) {
@@ -53,14 +59,20 @@ public class VehicleCacheUpdateJob {
             log.info("Horário: {}", startTime.format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")));
 
             try {
-                LocalDate endDate = LocalDate.now();
-                LocalDate startDate = endDate.minusDays(daysToFetch);
+                // Try primary date range first
+                List<ConsultaNotificationResponseDTO.NotificationData> notifications = 
+                    tryFetchWithDateRange(daysToFetch, "período principal");
 
-                log.info("Período de busca: {} a {}", startDate, endDate);
-                log.info("Consultando API externa...");
+                // If no data found, try fallback periods
+                if ((notifications == null || notifications.isEmpty()) && fallbackDaysToFetch > daysToFetch) {
+                    log.info("Tentando período de fallback de {} dias", fallbackDaysToFetch);
+                    notifications = tryFetchWithDateRange(fallbackDaysToFetch, "período de fallback");
+                }
 
-                List<ConsultaNotificationResponseDTO.NotificationData> notifications =
-                        apiQueryService.searchByPeriod(startDate, endDate);
+                // If still no data, try historical periods
+                if (notifications == null || notifications.isEmpty()) {
+                    notifications = tryHistoricalPeriods();
+                }
 
                 if (notifications != null && !notifications.isEmpty()) {
                     log.info("API retornou {} notificações", notifications.size());
@@ -68,6 +80,8 @@ public class VehicleCacheUpdateJob {
                     List<VehicleDTO> vehicles = vehicleInquiryMapper.mapToVeiculoDTO(notifications);
                     log.info("Convertidos para {} veículos únicos", vehicles.size());
 
+                    LocalDate endDate = LocalDate.now();
+                    LocalDate startDate = endDate.minusDays(daysToFetch);
                     CacheUpdateContext context = CacheUpdateContext.scheduledRefresh(startDate, endDate);
 
                     vehicleCacheService.updateCacheThreadSafe(vehicles, context);
@@ -77,7 +91,8 @@ public class VehicleCacheUpdateJob {
                     log.info("Tempo de execução: {} segundos", duration);
                     log.info("Total de veículos atualizados: {}", vehicles.size());
                 } else {
-                    log.warn("API retornou lista vazia - nenhuma atualização realizada");
+                    log.warn("==== NENHUM DADO ENCONTRADO EM TODOS OS PERÍODOS TENTADOS ====");
+                    log.warn("Verifique se há dados disponíveis na API externa ou se as datas estão corretas");
                 }
 
             } catch (Exception e) {
@@ -94,6 +109,105 @@ public class VehicleCacheUpdateJob {
         } finally {
             jobLock.unlock();
         }
+    }
+
+    private List<ConsultaNotificationResponseDTO.NotificationData> tryFetchWithDateRange(int days, String periodName) {
+        try {
+            LocalDate endDate = LocalDate.now();
+            LocalDate startDate = endDate.minusDays(days);
+
+            log.info("Tentando {} - Período de busca: {} a {}", periodName, startDate, endDate);
+            log.info("Consultando API externa...");
+
+            return apiQueryService.searchByPeriod(startDate, endDate);
+        } catch (Exception e) {
+            log.warn("Erro ao buscar dados para {}: {}", periodName, e.getMessage());
+            return List.of();
+        }
+    }
+
+    private List<ConsultaNotificationResponseDTO.NotificationData> tryHistoricalPeriods() {
+        log.info("Tentando períodos históricos...");
+        
+        // Try recent months going back in time
+        LocalDate currentDate = LocalDate.now();
+        
+        for (int monthsBack = 1; monthsBack <= 6; monthsBack++) {
+            try {
+                LocalDate endDate = currentDate.minusMonths(monthsBack);
+                LocalDate startDate = endDate.minusDays(30);
+                
+                // Don't go too far back
+                if (java.time.ChronoUnit.DAYS.between(startDate, currentDate) > maxHistoricalDays) {
+                    break;
+                }
+                
+                log.info("Tentando período histórico: {} a {} ({} meses atrás)", 
+                        startDate, endDate, monthsBack);
+                
+                List<ConsultaNotificationResponseDTO.NotificationData> notifications = 
+                    apiQueryService.searchByPeriod(startDate, endDate);
+                
+                if (notifications != null && !notifications.isEmpty()) {
+                    log.info("Encontrados dados no período histórico de {} meses atrás", monthsBack);
+                    return notifications;
+                }
+            } catch (Exception e) {
+                log.debug("Erro ao buscar período histórico de {} meses: {}", monthsBack, e.getMessage());
+            }
+        }
+        
+        log.warn("Nenhum dado encontrado em períodos históricos");
+        return List.of();
+    }
+
+    /**
+     * Método para diagnóstico manual - pode ser chamado via endpoint de admin
+     * para testar diferentes períodos e verificar a conectividade da API
+     */
+    public void runDiagnosticCheck() {
+        log.info("==== INICIANDO VERIFICAÇÃO DIAGNÓSTICA ====");
+        
+        try {
+            // Test current period
+            LocalDate endDate = LocalDate.now();
+            LocalDate startDate = endDate.minusDays(daysToFetch);
+            log.info("Testando período atual: {} a {}", startDate, endDate);
+            
+            List<ConsultaNotificationResponseDTO.NotificationData> currentResults = 
+                apiQueryService.searchByPeriod(startDate, endDate);
+            log.info("Período atual retornou {} registros", 
+                    currentResults != null ? currentResults.size() : 0);
+            
+            // Test historical periods
+            for (int monthsBack = 1; monthsBack <= 3; monthsBack++) {
+                LocalDate histEndDate = endDate.minusMonths(monthsBack);
+                LocalDate histStartDate = histEndDate.minusDays(30);
+                
+                log.info("Testando período histórico {}: {} a {}", monthsBack, histStartDate, histEndDate);
+                
+                List<ConsultaNotificationResponseDTO.NotificationData> histResults = 
+                    apiQueryService.searchByPeriod(histStartDate, histEndDate);
+                log.info("Período histórico {} retornou {} registros", 
+                        monthsBack, histResults != null ? histResults.size() : 0);
+                
+                if (histResults != null && !histResults.isEmpty()) {
+                    log.info("✓ Dados encontrados no período histórico de {} meses atrás", monthsBack);
+                    // Show sample of the first result
+                    if (!histResults.isEmpty()) {
+                        var sample = histResults.get(0);
+                        log.info("Exemplo de registro: Contrato={}, Data={}", 
+                                sample.nu_contrato(), sample.dt_pedido());
+                    }
+                    break;
+                }
+            }
+            
+        } catch (Exception e) {
+            log.error("Erro durante verificação diagnóstica", e);
+        }
+        
+        log.info("==== VERIFICAÇÃO DIAGNÓSTICA CONCLUÍDA ====");
     }
 
     @Scheduled(cron = "${vehicle.cache.cleanup.cron:0 0 2 * * ?}")

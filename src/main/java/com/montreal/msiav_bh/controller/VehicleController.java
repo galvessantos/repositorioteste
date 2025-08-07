@@ -295,5 +295,28 @@ public class VehicleController {
         }
     }
 
+    @PostMapping("/admin/diagnostic")
+    @Operation(summary = "Executar verificação diagnóstica da API externa")
+    @ApiResponse(responseCode = "200", description = "Diagnóstico executado com sucesso")
+    public ResponseEntity<Map<String, Object>> runDiagnostic() {
+        try {
+            log.info("Iniciando verificação diagnóstica via endpoint admin");
+            vehicleCacheUpdateJob.runDiagnosticCheck();
+            
+            return ResponseEntity.ok(Map.of(
+                    "status", "success",
+                    "message", "Verificação diagnóstica executada. Verifique os logs para detalhes.",
+                    "timestamp", java.time.LocalDateTime.now().toString()
+            ));
+        } catch (Exception e) {
+            log.error("Erro durante verificação diagnóstica", e);
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "status", "error",
+                    "message", "Erro durante verificação diagnóstica: " + e.getMessage(),
+                    "timestamp", java.time.LocalDateTime.now().toString()
+            ));
+        }
+    }
+
 
 }
