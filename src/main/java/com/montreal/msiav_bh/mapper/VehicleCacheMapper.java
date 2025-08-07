@@ -20,8 +20,9 @@ public abstract class VehicleCacheMapper {
     @Mapping(target = "createdAt", ignore = true)
     @Mapping(target = "updatedAt", ignore = true)
     @Mapping(target = "apiSyncDate", source = "syncDate")
-    @Mapping(target = "placa", expression = "java(cryptoService.encryptPlaca(dto.placa()))")
-    @Mapping(target = "contrato", expression = "java(cryptoService.encryptContrato(dto.contrato()))")
+    // DTO fields are ALREADY ENCRYPTED from VehicleInquiryMapper - don't encrypt again
+    @Mapping(target = "placa", source = "dto.placa")
+    @Mapping(target = "contrato", source = "dto.contrato")
     public abstract VehicleCache toEntity(VehicleDTO dto, LocalDateTime syncDate);
 
     @Mapping(target = "id", source = "externalId")
