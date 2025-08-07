@@ -238,6 +238,13 @@ public class VehicleCacheService {
                     log.debug("Registro duplicado ignorado (constraint violation): protocolo={}, erro={}",
                             dto.protocolo(), e.getMessage().substring(0, Math.min(100, e.getMessage().length())));
                     duplicateSkipped++;
+                } else if (e.getMessage() != null && 
+                           e.getMessage().contains("value too long for type character varying")) {
+                    log.error("ERRO DE TAMANHO DE CAMPO: Algum campo excede o limite do banco de dados");
+                    log.error("Protocolo afetado: {}", dto.protocolo());
+                    log.error("Este erro indica que os campos criptografados são muito longos");
+                    log.error("SOLUÇÃO: Execute a migração do banco: ALTER TABLE vehicle_cache ALTER COLUMN contrato TYPE TEXT, ALTER TABLE vehicle_cache ALTER COLUMN placa TYPE TEXT;");
+                    throw new RuntimeException("Campo muito longo - necessária migração do banco de dados", e);
                 } else {
                     log.error("Erro inesperado ao processar veículo protocolo={}: {}", dto.protocolo(), e.getMessage());
                     throw e;

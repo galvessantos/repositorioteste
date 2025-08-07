@@ -132,6 +132,30 @@ vehicle.cache.update.interval=300000  # 5 minutos
 - Verificar `vehicle.cache.update.enabled=true`
 - Verificar se há erros de criptografia nos logs
 
+### 5. Erro "value too long for type character varying(255)"
+**Causa**: Campos criptografados excedem 255 caracteres
+**Sintomas**:
+```
+ERROR: value too long for type character varying(255)
+DataIntegrityViolationException: could not execute statement
+```
+
+**Solução Imediata**:
+1. Execute o script de migração:
+```sql
+-- Conecte no banco PostgreSQL e execute:
+ALTER TABLE vehicle_cache ALTER COLUMN contrato TYPE TEXT;
+ALTER TABLE vehicle_cache ALTER COLUMN placa TYPE TEXT;
+```
+
+2. Ou use o script completo em `scripts/fix_vehicle_cache_fields.sql`:
+```bash
+psql -h HOST -U USER -d DATABASE -f scripts/fix_vehicle_cache_fields.sql
+```
+
+**Verificação**:
+Após executar a migração, o próximo job deve funcionar normalmente.
+
 ## Endpoints Disponíveis
 
 ### Busca de Veículos
