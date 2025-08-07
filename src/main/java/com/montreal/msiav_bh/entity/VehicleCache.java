@@ -22,7 +22,10 @@ import java.time.LocalDateTime;
         @Index(name = "idx_contrato", columnList = "contrato"),
         @Index(name = "idx_protocolo", columnList = "protocolo"),
         @Index(name = "idx_api_sync_date", columnList = "api_sync_date"),
-        @Index(name = "idx_unique_vehicle", columnList = "contrato, placa", unique = true)
+        @Index(name = "idx_unique_vehicle", columnList = "contrato, placa", unique = true),
+        @Index(name = "idx_contrato_hash", columnList = "contrato_hash"),
+        @Index(name = "idx_placa_hash", columnList = "placa_hash"),
+        @Index(name = "idx_unique_vehicle_hash", columnList = "contrato_hash, placa_hash", unique = true)
 })
 public class VehicleCache {
 
@@ -43,9 +46,15 @@ public class VehicleCache {
     @JsonIgnore
     private String contrato;
 
+    @Column(name = "contrato_hash", length = 64)
+    private String contratoHash;
+
     @Column(name = "placa", columnDefinition = "TEXT")
     @JsonIgnore
     private String placa;
+
+    @Column(name = "placa_hash", length = 64)
+    private String placaHash;
 
     @Column(name = "modelo")
     private String modelo;

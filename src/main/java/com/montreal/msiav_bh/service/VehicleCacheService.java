@@ -223,45 +223,42 @@ public class VehicleCacheService {
                     VehicleCache updatedEntity = updateExistingVehicle(existing.get(), dto, syncDate);
                     vehicleCacheRepository.save(updatedEntity);
                     updated++;
-                    log.trace("Veículo atualizado: protocolo={}", dto.protocolo());
+                    log.trace("Veículo atualizado por contrato/placa");
                 } else {
                     VehicleCache newEntity = vehicleCacheMapper.toEntity(dto, syncDate);
                     vehicleCacheRepository.save(newEntity);
                     inserted++;
-                    log.trace("Novo veículo inserido: protocolo={}", dto.protocolo());
+                    log.trace("Novo veículo inserido por contrato/placa");
                 }
             } catch (Exception e) {
                 if (e.getMessage() != null &&
                         (e.getMessage().contains("constraint") ||
                                 e.getMessage().contains("duplicate") ||
                                 e.getMessage().contains("unique"))) {
-                    // Attempt to upsert by protocolo if a constraint was hit
+                    // Fallback de upsert por contrato/placa em caso de constraint
                     try {
-                        if (dto.protocolo() != null && !dto.protocolo().trim().isEmpty() && !"N/A".equals(dto.protocolo())) {
-                            vehicleCacheRepository.findByProtocolo(dto.protocolo()).ifPresent(existingByProto -> {
-                                VehicleCache updatedEntity = updateExistingVehicle(existingByProto, dto, syncDate);
-                                vehicleCacheRepository.save(updatedEntity);
-                            });
+                        Optional<VehicleCache> fallbackExisting = findExistingVehicle(dto);
+                        if (fallbackExisting.isPresent()) {
+                            VehicleCache updatedEntity = updateExistingVehicle(fallbackExisting.get(), dto, syncDate);
+                            vehicleCacheRepository.save(updatedEntity);
                             updated++;
-                            log.debug("Violação de constraint transformada em update por protocolo={}", dto.protocolo());
+                            log.debug("Violação de constraint transformada em update por contrato/placa");
                         } else {
                             duplicateSkipped++;
-                            log.debug("Registro duplicado ignorado (constraint violation) sem protocolo: protocolo={}, erro={}",
-                                    dto.protocolo(), e.getMessage().substring(0, Math.min(100, e.getMessage().length())));
+                            log.debug("Registro duplicado ignorado (constraint) mas não foi possível localizar por contrato/placa");
                         }
                     } catch (Exception inner) {
                         duplicateSkipped++;
-                        log.debug("Falha no fallback de update por protocolo: protocolo={}, erro={}", dto.protocolo(), inner.getMessage());
+                        log.debug("Falha no fallback de update por contrato/placa: {}", inner.getMessage());
                     }
                 } else if (e.getMessage() != null &&
                         e.getMessage().contains("value too long for type character varying")) {
                     log.error("ERRO DE TAMANHO DE CAMPO: Algum campo excede o limite do banco de dados");
-                    log.error("Protocolo afetado: {}", dto.protocolo());
                     log.error("Este erro indica que os campos criptografados são muito longos");
                     log.error("SOLUÇÃO: Execute a migração do banco: ALTER TABLE vehicle_cache ALTER COLUMN contrato TYPE TEXT, ALTER TABLE vehicle_cache ALTER COLUMN placa TYPE TEXT;");
                     throw new RuntimeException("Campo muito longo - necessária migração do banco de dados", e);
                 } else {
-                    log.error("Erro inesperado ao processar veículo protocolo={}: {}", dto.protocolo(), e.getMessage());
+                    log.error("Erro inesperado ao processar veículo: {}", e.getMessage());
                     throw e;
                 }
             }
@@ -272,20 +269,22 @@ public class VehicleCacheService {
     }
 
     private Optional<VehicleCache> findExistingVehicle(VehicleDTO dto) {
-        log.debug("Procurando veículo existente para contrato:{}, placa:{}, protocolo:{}",
-                dto.contrato(), dto.placa(), dto.protocolo());
+        log.debug("Procurando veículo existente por contrato/placa");
 
-        // 1) Tentar pelo protocolo (chave mais estável e não criptografada)
-        if (dto.protocolo() != null && !"N/A".equals(dto.protocolo()) && !dto.protocolo().trim().isEmpty()) {
-            Optional<VehicleCache> byProtocolo = vehicleCacheRepository.findByProtocolo(dto.protocolo());
-            if (byProtocolo.isPresent()) {
-                log.debug("Veículo encontrado por protocolo");
-                return byProtocolo;
-            }
-        }
-
-        // 2) Tentar por contrato criptografado
+        // Preferência: hash determinístico (independente da criptografia)
         if (dto.contrato() != null && !"N/A".equals(dto.contrato()) && !dto.contrato().trim().isEmpty()) {
+            try {
+                String contratoHash = cryptoService.hashContrato(dto.contrato());
+                if (contratoHash != null) {
+                    Optional<VehicleCache> byContratoHash = vehicleCacheRepository.findByContratoHash(contratoHash);
+                    if (byContratoHash.isPresent()) {
+                        log.debug("Veículo encontrado por contratoHash");
+                        return byContratoHash;
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Erro ao buscar por contratoHash: {}", e.getMessage());
+            }
             try {
                 String contratoEncrypted = cryptoService.encryptContrato(dto.contrato());
                 Optional<VehicleCache> byContrato = vehicleCacheRepository.findByContrato(contratoEncrypted);
@@ -298,8 +297,19 @@ public class VehicleCacheService {
             }
         }
 
-        // 3) Tentar por placa criptografada
         if (dto.placa() != null && !"N/A".equals(dto.placa()) && !dto.placa().trim().isEmpty()) {
+            try {
+                String placaHash = cryptoService.hashPlaca(dto.placa());
+                if (placaHash != null) {
+                    Optional<VehicleCache> byPlacaHash = vehicleCacheRepository.findByPlacaHash(placaHash);
+                    if (byPlacaHash.isPresent()) {
+                        log.debug("Veículo encontrado por placaHash");
+                        return byPlacaHash;
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("Erro ao buscar por placaHash: {}", e.getMessage());
+            }
             try {
                 String placaEncrypted = cryptoService.encryptPlaca(dto.placa());
                 Optional<VehicleCache> byPlaca = vehicleCacheRepository.findByPlaca(placaEncrypted);
@@ -312,7 +322,7 @@ public class VehicleCacheService {
             }
         }
 
-        log.debug("Nenhum veículo existente encontrado");
+        log.debug("Nenhum veículo existente encontrado por contrato/placa");
         return Optional.empty();
     }
 
@@ -321,7 +331,9 @@ public class VehicleCacheService {
         existing.setDataPedido(dto.dataPedido());
 
         existing.setContrato(cryptoService.encryptContrato(dto.contrato()));
+        existing.setContratoHash(cryptoService.hashContrato(dto.contrato()));
         existing.setPlaca(cryptoService.encryptPlaca(dto.placa()));
+        existing.setPlacaHash(cryptoService.hashPlaca(dto.placa()));
 
         existing.setModelo(dto.modelo());
         existing.setUf(dto.uf());

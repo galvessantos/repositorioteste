@@ -23,6 +23,10 @@ public interface VehicleCacheRepository extends JpaRepository<VehicleCache, Long
 
     Optional<VehicleCache> findByPlaca(String placa);
 
+    Optional<VehicleCache> findByContratoHash(String contratoHash);
+
+    Optional<VehicleCache> findByPlacaHash(String placaHash);
+
     Optional<VehicleCache> findByProtocolo(String protocolo);
 
     @Query("SELECT v FROM VehicleCache v WHERE v.apiSyncDate = (SELECT MAX(vc.apiSyncDate) FROM VehicleCache vc)")

@@ -5,6 +5,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -71,7 +75,7 @@ public class VehicleCacheCryptoService {
                 log.error("PostgresCryptoUtil retornou valor suspeito para contrato '{}': '{}'", contrato, encrypted);
             }
         } catch (Exception e) {
-            log.error("Falha ao criptografar contrato '{}' com PostgresCryptoUtil: {}", contrato, e.getMessage(), e);
+            log.error("Falha ao criptografar contrato '{}' com PostgresCryptoUtil: {}", contrato, e.getMessage());
         }
 
         log.error("ERRO CRÍTICO: Impossível criptografar contrato '{}' - ABORTANDO OPERAÇÃO!", contrato);
@@ -94,6 +98,38 @@ public class VehicleCacheCryptoService {
         } catch (Exception e) {
             log.error("Erro ao descriptografar contrato: {}", e.getMessage());
             return contratoEncrypted;
+        }
+    }
+
+    public String hashPlaca(String placa) {
+        if (placa == null || placa.trim().isEmpty() || "N/A".equals(placa)) {
+            return null;
+        }
+        String normalized = placa.toUpperCase().trim();
+        return sha256Hex(normalized);
+    }
+
+    public String hashContrato(String contrato) {
+        if (contrato == null || contrato.trim().isEmpty() || "N/A".equals(contrato)) {
+            return null;
+        }
+        String normalized = contrato.trim();
+        return sha256Hex(normalized);
+    }
+
+    private String sha256Hex(String input) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                String h = Integer.toHexString(0xff & b);
+                if (h.length() == 1) hex.append('0');
+                hex.append(h);
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not available", e);
         }
     }
 

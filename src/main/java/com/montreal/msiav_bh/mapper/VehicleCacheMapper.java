@@ -22,6 +22,8 @@ public abstract class VehicleCacheMapper {
     @Mapping(target = "apiSyncDate", source = "syncDate")
     @Mapping(target = "placa", expression = "java(cryptoService.encryptPlaca(dto.placa()))")
     @Mapping(target = "contrato", expression = "java(cryptoService.encryptContrato(dto.contrato()))")
+    @Mapping(target = "placaHash", expression = "java(cryptoService.hashPlaca(dto.placa()))")
+    @Mapping(target = "contratoHash", expression = "java(cryptoService.hashContrato(dto.contrato()))")
     public abstract VehicleCache toEntity(VehicleDTO dto, LocalDateTime syncDate);
 
     @Mapping(target = "id", source = "externalId")

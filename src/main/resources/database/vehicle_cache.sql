@@ -5,7 +5,9 @@ CREATE TABLE IF NOT EXISTS vehicle_cache (
     credor VARCHAR(255),
     data_pedido DATE,
     contrato VARCHAR(100) UNIQUE,
+    contrato_hash VARCHAR(64),
     placa VARCHAR(15),
+    placa_hash VARCHAR(64),
     modelo VARCHAR(100),
     uf VARCHAR(2),
     cidade VARCHAR(100),
@@ -24,3 +26,5 @@ CREATE INDEX IF NOT EXISTS idx_vehicle_cache_sync_date ON vehicle_cache(api_sync
 CREATE INDEX IF NOT EXISTS idx_vehicle_cache_filters ON vehicle_cache(data_pedido, credor, uf, cidade);
 CREATE INDEX IF NOT EXISTS idx_vehicle_cache_placa ON vehicle_cache(placa);
 CREATE INDEX IF NOT EXISTS idx_vehicle_cache_cpf ON vehicle_cache(cpf_devedor);
+CREATE INDEX IF NOT EXISTS idx_vehicle_cache_contrato_hash ON vehicle_cache(contrato_hash);
+CREATE INDEX IF NOT EXISTS idx_vehicle_cache_placa_hash ON vehicle_cache(placa_hash);
