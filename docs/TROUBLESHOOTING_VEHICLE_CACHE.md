@@ -142,11 +142,54 @@ Este endpoint retorna informações sobre o status do cache nos headers HTTP:
 - `X-Cache-Status`: Valid/Outdated
 - `X-Cache-Age-Minutes`: Idade do cache em minutos
 
+### Busca por Contrato
+```
+GET /api/v1/vehicle/contract?contrato=NUMERO_CONTRATO
+```
+Busca informações detalhadas de um contrato específico.
+
 ### Health Check
 ```
 GET /api/v1/vehicle/health
 ```
 Verificação básica da saúde da API.
+
+### Invalidação de Cache (Para Testes)
+```
+DELETE /api/v1/vehicle/cache/invalidate
+```
+**⚠️ CUIDADO**: Remove TODOS os dados do cache.
+
+**Proteção obrigatória**: Requer header de confirmação:
+```bash
+curl -X DELETE http://localhost:8080/api/v1/vehicle/cache/invalidate \
+  -H "X-Confirm-Action: CONFIRM_INVALIDATE" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**Uso recomendado**:
+- Testes automatizados
+- Limpeza forçada do cache em casos específicos
+- Reset do estado do cache para debugging
+
+**Resposta de sucesso**:
+```json
+{
+  "status": "success",
+  "message": "Cache invalidado com sucesso",
+  "recordsRemoved": 150,
+  "warning": "Próxima consulta forçará atualização via API"
+}
+```
+
+**Resposta sem confirmação**:
+```json
+{
+  "status": "error",
+  "message": "Ação não confirmada. Adicione o header 'X-Confirm-Action: CONFIRM_INVALIDATE'",
+  "warning": "Esta operação remove TODOS os dados do cache"
+}
+```
 
 ## Contato
 Para problemas persistentes, verificar logs completos e contatar a equipe de desenvolvimento.

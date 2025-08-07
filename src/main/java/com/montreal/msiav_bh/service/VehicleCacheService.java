@@ -392,6 +392,13 @@ public class VehicleCacheService {
         return toDelete.size();
     }
 
+    @Transactional
+    public void invalidateCache() {
+        log.info("Invalidando todo o cache de veículos");
+        vehicleCacheRepository.deleteAll();
+        log.info("Cache invalidado com sucesso - {} registros removidos", vehicleCacheRepository.count());
+    }
+
     public CacheStatus getCacheStatus() {
         Optional<LocalDateTime> lastSyncOpt = vehicleCacheRepository.findLastSyncDate();
         long totalRecords = vehicleCacheRepository.count();

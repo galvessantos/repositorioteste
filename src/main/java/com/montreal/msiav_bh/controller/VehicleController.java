@@ -150,5 +150,41 @@ public class VehicleController {
         ));
     }
 
+    @DeleteMapping("/cache/invalidate")
+    @Operation(summary = "Invalidar todo o cache (usar com cuidado)")
+    public ResponseEntity<Map<String, Object>> invalidateCache(
+            @RequestHeader(value = "X-Confirm-Action", required = false) String confirmAction) {
+        
+        // Proteção simples para evitar uso acidental
+        if (!"CONFIRM_INVALIDATE".equals(confirmAction)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "status", "error",
+                    "message", "Ação não confirmada. Adicione o header 'X-Confirm-Action: CONFIRM_INVALIDATE'",
+                    "warning", "Esta operação remove TODOS os dados do cache"
+            ));
+        }
+        
+        try {
+            log.warn("INVALIDAÇÃO DE CACHE SOLICITADA - Removendo todos os dados do cache");
+            long recordsBeforeInvalidation = vehicleCacheService.getCacheStatus().getTotalRecords();
+            
+            vehicleCacheService.invalidateCache();
+            
+            return ResponseEntity.ok(Map.of(
+                    "status", "success",
+                    "message", "Cache invalidado com sucesso",
+                    "recordsRemoved", recordsBeforeInvalidation,
+                    "warning", "Próxima consulta forçará atualização via API"
+            ));
+        } catch (Exception e) {
+            log.error("Falha ao invalidar cache", e);
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "status", "error",
+                    "message", "Falha ao invalidar o cache",
+                    "error", e.getMessage()
+            ));
+        }
+    }
+
 
 }
