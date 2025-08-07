@@ -83,15 +83,18 @@ public class VehicleCacheUpdateJob {
                     LocalDate startDate = endDate.minusDays(daysToFetch);
                     CacheUpdateContext context = CacheUpdateContext.scheduledRefresh(startDate, endDate);
 
+                    log.info("🔄 Iniciando sincronização com PostgreSQL...");
                     vehicleCacheService.updateCacheThreadSafe(vehicles, context);
 
                     long duration = java.time.Duration.between(startTime, LocalDateTime.now()).toSeconds();
                     log.info("==== JOB CONCLUÍDO COM SUCESSO ====");
-                    log.info("Tempo de execução: {} segundos", duration);
-                    log.info("Total de veículos atualizados: {}", vehicles.size());
+                    log.info("⏱️ Tempo de execução: {} segundos", duration);
+                    log.info("📊 Total de veículos processados: {}", vehicles.size());
+                    log.info("✅ Próxima execução em 10 minutos");
                 } else {
                     log.warn("==== NENHUM DADO ENCONTRADO EM TODOS OS PERÍODOS TENTADOS ====");
-                    log.warn("Verifique se há dados disponíveis na API externa ou se as datas estão corretas");
+                    log.warn("⚠️ Verifique se há dados disponíveis na API externa ou se as datas estão corretas");
+                    log.warn("🔧 Cache atual será mantido até próxima sincronização bem-sucedida");
                 }
 
             } catch (Exception e) {

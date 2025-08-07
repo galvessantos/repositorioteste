@@ -214,28 +214,42 @@ public class VehicleCacheService {
         int updated = 0;
         int inserted = 0;
         int duplicateSkipped = 0;
+        int noChangesFound = 0;
+
+        log.info("=== PROCESSANDO {} VEÍCULOS DA API ===", vehicles.size());
 
         for (VehicleDTO dto : vehicles) {
             try {
                 Optional<VehicleCache> existing = findExistingVehicle(dto);
 
                 if (existing.isPresent()) {
-                    VehicleCache updatedEntity = updateExistingVehicle(existing.get(), dto, syncDate);
-                    vehicleCacheRepository.save(updatedEntity);
-                    updated++;
-                    log.trace("Veículo atualizado: protocolo={}", dto.protocolo());
+                    VehicleCache existingEntity = existing.get();
+                    
+                    // Verifica se há mudanças reais nos dados
+                    if (hasDataChanges(existingEntity, dto)) {
+                        VehicleCache updatedEntity = updateExistingVehicle(existingEntity, dto, syncDate);
+                        vehicleCacheRepository.save(updatedEntity);
+                        updated++;
+                        log.debug("✓ Veículo ATUALIZADO (dados mudaram): protocolo={}", dto.protocolo());
+                    } else {
+                        // Apenas atualiza a data de sincronização
+                        existingEntity.setApiSyncDate(syncDate);
+                        vehicleCacheRepository.save(existingEntity);
+                        noChangesFound++;
+                        log.trace("⚡ Veículo SEM MUDANÇAS (só sync date): protocolo={}", dto.protocolo());
+                    }
                 } else {
                     VehicleCache newEntity = vehicleCacheMapper.toEntity(dto, syncDate);
                     vehicleCacheRepository.save(newEntity);
                     inserted++;
-                    log.trace("Novo veículo inserido: protocolo={}", dto.protocolo());
+                    log.debug("➕ NOVO veículo inserido: protocolo={}", dto.protocolo());
                 }
             } catch (Exception e) {
                 if (e.getMessage() != null &&
                         (e.getMessage().contains("constraint") ||
                                 e.getMessage().contains("duplicate") ||
                                 e.getMessage().contains("unique"))) {
-                    log.debug("Registro duplicado ignorado (constraint violation): protocolo={}, erro={}",
+                    log.debug("⚠️ Registro duplicado ignorado (constraint violation): protocolo={}, erro={}",
                             dto.protocolo(), e.getMessage().substring(0, Math.min(100, e.getMessage().length())));
                     duplicateSkipped++;
                 } else if (e.getMessage() != null &&
@@ -252,40 +266,41 @@ public class VehicleCacheService {
             }
         }
 
-        log.info("Cache atualizado: {} atualizados, {} inseridos, {} duplicados ignorados",
-                updated, inserted, duplicateSkipped);
+        log.info("=== RESULTADO DA SINCRONIZAÇÃO ===");
+        log.info("✅ {} atualizados (com mudanças)", updated);
+        log.info("⚡ {} sem mudanças (só sync date)", noChangesFound);
+        log.info("➕ {} novos inseridos", inserted);
+        log.info("⚠️ {} duplicados ignorados", duplicateSkipped);
+        log.info("📊 Total processado: {}", vehicles.size());
+        
+        if (inserted == 0 && updated == 0 && noChangesFound > 0) {
+            log.info("🎯 SINCRONIZAÇÃO PERFEITA: Dados já estavam em sincronia com a API!");
+        }
     }
 
     private Optional<VehicleCache> findExistingVehicle(VehicleDTO dto) {
         log.debug("Procurando veículo existente para contrato:{}, placa:{}, protocolo:{}",
                 dto.contrato(), dto.placa(), dto.protocolo());
 
-        if (dto.contrato() != null && !"N/A".equals(dto.contrato()) && !dto.contrato().trim().isEmpty()) {
+        // 1. PRIMEIRO: Busca pela combinação contrato + placa (chave primária de negócio)
+        if (dto.contrato() != null && !"N/A".equals(dto.contrato()) && !dto.contrato().trim().isEmpty() &&
+            dto.placa() != null && !"N/A".equals(dto.placa()) && !dto.placa().trim().isEmpty()) {
             try {
                 String contratoEncrypted = cryptoService.encryptContrato(dto.contrato());
-                Optional<VehicleCache> byContrato = vehicleCacheRepository.findByContrato(contratoEncrypted);
-                if (byContrato.isPresent()) {
-                    log.debug("Veículo encontrado por contrato criptografado");
-                    return byContrato;
-                }
-            } catch (Exception e) {
-                log.debug("Erro ao buscar por contrato: {}", e.getMessage());
-            }
-        }
-
-        if (dto.placa() != null && !"N/A".equals(dto.placa()) && !dto.placa().trim().isEmpty()) {
-            try {
                 String placaEncrypted = cryptoService.encryptPlaca(dto.placa());
-                Optional<VehicleCache> byPlaca = vehicleCacheRepository.findByPlaca(placaEncrypted);
-                if (byPlaca.isPresent()) {
-                    log.debug("Veículo encontrado por placa criptografada");
-                    return byPlaca;
+                
+                // Busca por combinação contrato+placa (mais confiável)
+                Optional<VehicleCache> byCombo = vehicleCacheRepository.findByContratoAndPlaca(contratoEncrypted, placaEncrypted);
+                if (byCombo.isPresent()) {
+                    log.debug("Veículo encontrado por combinação contrato+placa");
+                    return byCombo;
                 }
             } catch (Exception e) {
-                log.debug("Erro ao buscar por placa: {}", e.getMessage());
+                log.debug("Erro ao buscar por combinação contrato+placa: {}", e.getMessage());
             }
         }
 
+        // 2. SEGUNDO: Busca por protocolo (único por veículo)
         if (dto.protocolo() != null && !"N/A".equals(dto.protocolo()) && !dto.protocolo().trim().isEmpty()) {
             Optional<VehicleCache> byProtocolo = vehicleCacheRepository.findByProtocolo(dto.protocolo());
             if (byProtocolo.isPresent()) {
@@ -294,7 +309,35 @@ public class VehicleCacheService {
             }
         }
 
-        log.debug("Nenhum veículo existente encontrado");
+        // 3. TERCEIRO: Busca por contrato apenas (fallback)
+        if (dto.contrato() != null && !"N/A".equals(dto.contrato()) && !dto.contrato().trim().isEmpty()) {
+            try {
+                String contratoEncrypted = cryptoService.encryptContrato(dto.contrato());
+                Optional<VehicleCache> byContrato = vehicleCacheRepository.findByContrato(contratoEncrypted);
+                if (byContrato.isPresent()) {
+                    log.debug("Veículo encontrado por contrato");
+                    return byContrato;
+                }
+            } catch (Exception e) {
+                log.debug("Erro ao buscar por contrato: {}", e.getMessage());
+            }
+        }
+
+        // 4. QUARTO: Busca por placa apenas (último fallback)
+        if (dto.placa() != null && !"N/A".equals(dto.placa()) && !dto.placa().trim().isEmpty()) {
+            try {
+                String placaEncrypted = cryptoService.encryptPlaca(dto.placa());
+                Optional<VehicleCache> byPlaca = vehicleCacheRepository.findByPlaca(placaEncrypted);
+                if (byPlaca.isPresent()) {
+                    log.debug("Veículo encontrado por placa");
+                    return byPlaca;
+                }
+            } catch (Exception e) {
+                log.debug("Erro ao buscar por placa: {}", e.getMessage());
+            }
+        }
+
+        log.debug("Nenhum veículo existente encontrado - será inserido como novo");
         return Optional.empty();
     }
 
@@ -316,6 +359,50 @@ public class VehicleCacheService {
         existing.setApiSyncDate(syncDate);
 
         return existing;
+    }
+
+    /**
+     * Verifica se há mudanças reais nos dados entre a entidade existente e o DTO da API
+     */
+    private boolean hasDataChanges(VehicleCache existing, VehicleDTO dto) {
+        try {
+            // Descriptografa os dados existentes para comparação
+            String existingContrato = cryptoService.decryptContrato(existing.getContrato());
+            String existingPlaca = cryptoService.decryptPlaca(existing.getPlaca());
+            
+            // Compara todos os campos relevantes
+            boolean contratoChanged = !Objects.equals(existingContrato, dto.contrato());
+            boolean placaChanged = !Objects.equals(existingPlaca, dto.placa());
+            boolean credorChanged = !Objects.equals(existing.getCredor(), dto.credor());
+            boolean dataPedidoChanged = !Objects.equals(existing.getDataPedido(), dto.dataPedido());
+            boolean modeloChanged = !Objects.equals(existing.getModelo(), dto.modelo());
+            boolean ufChanged = !Objects.equals(existing.getUf(), dto.uf());
+            boolean cidadeChanged = !Objects.equals(existing.getCidade(), dto.cidade());
+            boolean cpfDevedorChanged = !Objects.equals(existing.getCpfDevedor(), dto.cpfDevedor());
+            boolean protocoloChanged = !Objects.equals(existing.getProtocolo(), dto.protocolo());
+            boolean etapaAtualChanged = !Objects.equals(existing.getEtapaAtual(), dto.etapaAtual());
+            boolean statusApreensaoChanged = !Objects.equals(existing.getStatusApreensao(), dto.statusApreensao());
+            boolean ultimaMovimentacaoChanged = !Objects.equals(existing.getUltimaMovimentacao(), dto.ultimaMovimentacao());
+            
+            boolean hasChanges = contratoChanged || placaChanged || credorChanged || dataPedidoChanged || 
+                               modeloChanged || ufChanged || cidadeChanged || cpfDevedorChanged || 
+                               protocoloChanged || etapaAtualChanged || statusApreensaoChanged || ultimaMovimentacaoChanged;
+            
+            if (hasChanges) {
+                log.debug("Mudanças detectadas no protocolo {}: contrato={}, placa={}, credor={}, dataPedido={}, " +
+                         "modelo={}, uf={}, cidade={}, cpf={}, etapa={}, status={}, ultimaMov={}", 
+                         dto.protocolo(), contratoChanged, placaChanged, credorChanged, dataPedidoChanged,
+                         modeloChanged, ufChanged, cidadeChanged, cpfDevedorChanged, 
+                         etapaAtualChanged, statusApreensaoChanged, ultimaMovimentacaoChanged);
+            }
+            
+            return hasChanges;
+            
+        } catch (Exception e) {
+            log.warn("Erro ao comparar dados do veículo protocolo={}: {} - assumindo que há mudanças", 
+                    dto.protocolo(), e.getMessage());
+            return true; // Em caso de erro, assume que há mudanças para ser conservativo
+        }
     }
 
     @Transactional
