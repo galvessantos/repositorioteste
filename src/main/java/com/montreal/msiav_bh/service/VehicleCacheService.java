@@ -295,6 +295,15 @@ public class VehicleCacheService {
             } catch (Exception e) {
                 log.debug("Erro ao buscar por contrato: {}", e.getMessage());
             }
+            try {
+                Optional<VehicleCache> byContratoPlain = vehicleCacheRepository.findByContratoPlain(dto.contrato());
+                if (byContratoPlain.isPresent()) {
+                    log.debug("Veículo encontrado por contrato (plain no banco)");
+                    return byContratoPlain;
+                }
+            } catch (Exception e) {
+                log.debug("Erro ao buscar por contrato plain: {}", e.getMessage());
+            }
         }
 
         if (dto.placa() != null && !"N/A".equals(dto.placa()) && !dto.placa().trim().isEmpty()) {
@@ -319,6 +328,15 @@ public class VehicleCacheService {
                 }
             } catch (Exception e) {
                 log.debug("Erro ao buscar por placa: {}", e.getMessage());
+            }
+            try {
+                Optional<VehicleCache> byPlacaPlain = vehicleCacheRepository.findByPlacaPlain(dto.placa());
+                if (byPlacaPlain.isPresent()) {
+                    log.debug("Veículo encontrado por placa (plain no banco)");
+                    return byPlacaPlain;
+                }
+            } catch (Exception e) {
+                log.debug("Erro ao buscar por placa plain: {}", e.getMessage());
             }
         }
 

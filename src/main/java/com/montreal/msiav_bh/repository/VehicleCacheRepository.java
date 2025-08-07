@@ -29,6 +29,12 @@ public interface VehicleCacheRepository extends JpaRepository<VehicleCache, Long
 
     Optional<VehicleCache> findByProtocolo(String protocolo);
 
+    @Query(value = "SELECT * FROM vehicle_cache v WHERE v.contrato IS NOT NULL AND descriptografar(decode(v.contrato,'hex')) = :contrato LIMIT 1", nativeQuery = true)
+    Optional<VehicleCache> findByContratoPlain(@Param("contrato") String contrato);
+
+    @Query(value = "SELECT * FROM vehicle_cache v WHERE v.placa IS NOT NULL AND descriptografar(decode(v.placa,'hex')) = :placa LIMIT 1", nativeQuery = true)
+    Optional<VehicleCache> findByPlacaPlain(@Param("placa") String placa);
+
     @Query("SELECT v FROM VehicleCache v WHERE v.apiSyncDate = (SELECT MAX(vc.apiSyncDate) FROM VehicleCache vc)")
     Page<VehicleCache> findLatestCachedVehicles(Pageable pageable);
 
