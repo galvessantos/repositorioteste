@@ -166,7 +166,10 @@ public class VehicleCacheService {
         if (vehicles.isEmpty() && !context.isHasFilters()) {
             long currentCount = vehicleCacheRepository.count();
             if (currentCount > 100) {
-                log.warn("API retornou vazio mas cache tem {} registros - preservando dados atuais", currentCount);
+                log.warn("API retornou vazio mas cache tem {} registros - preservando dados atuais e atualizando api_sync_date", currentCount);
+                // Touch sync date to reflect a successful sync with no changes
+                int touched = vehicleCacheRepository.touchAllSyncDates(syncDate);
+                log.info("api_sync_date atualizado para {} registros", touched);
                 return;
             } else {
                 log.warn("API retornou vazio e cache pequeno - limpando cache");
@@ -176,7 +179,9 @@ public class VehicleCacheService {
         }
 
         if (vehicles.isEmpty()) {
-            log.info("API retornou vazio com filtros - preservando cache existente");
+            log.info("API retornou vazio com filtros - preservando cache existente e tocando api_sync_date");
+            int touched = vehicleCacheRepository.touchAllSyncDates(syncDate);
+            log.info("api_sync_date atualizado para {} registros", touched);
             return;
         }
 
@@ -467,6 +472,12 @@ public class VehicleCacheService {
         }
 
         return debugInfo;
+    }
+
+    @Transactional
+    public int touchSyncDates(LocalDateTime syncDate) {
+        log.info("Atualizando api_sync_date de todos os registros para {}", syncDate);
+        return vehicleCacheRepository.touchAllSyncDates(syncDate);
     }
 
     @lombok.Data

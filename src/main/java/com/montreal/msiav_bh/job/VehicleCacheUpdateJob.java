@@ -77,7 +77,8 @@ public class VehicleCacheUpdateJob {
                     log.info("Tempo de execução: {} segundos", duration);
                     log.info("Total de veículos atualizados: {}", vehicles.size());
                 } else {
-                    log.warn("API retornou lista vazia - nenhuma atualização realizada");
+                    log.warn("API retornou lista vazia - tocando api_sync_date para marcar sync sem alterações");
+                    vehicleCacheService.touchSyncDates(LocalDateTime.now());
                 }
 
             } catch (Exception e) {

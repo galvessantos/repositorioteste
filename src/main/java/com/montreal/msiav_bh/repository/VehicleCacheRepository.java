@@ -80,5 +80,9 @@ public interface VehicleCacheRepository extends JpaRepository<VehicleCache, Long
                                             @Param("statusApreensao") String statusApreensao,
                                             Pageable pageable);
 
+    // Touch api_sync_date for all rows to mark a successful sync even when API returns no changes
+    @Modifying
+    @Query("UPDATE VehicleCache v SET v.apiSyncDate = :syncDate")
+    int touchAllSyncDates(@Param("syncDate") LocalDateTime syncDate);
 
 }

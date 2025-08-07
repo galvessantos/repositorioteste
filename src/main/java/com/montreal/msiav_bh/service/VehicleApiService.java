@@ -17,6 +17,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -186,6 +187,9 @@ public class VehicleApiService {
                 CacheUpdateContext context = CacheUpdateContext.scheduledRefresh(searchStart, searchEnd);
                 vehicleCacheService.updateCacheThreadSafe(vehicles, context);
                 log.info("Cache atualizado em background com {} registros", vehicles.size());
+            } else {
+                log.info("API vazia em background - tocando api_sync_date para marcar sync");
+                vehicleCacheService.touchSyncDates(LocalDateTime.now());
             }
 
         } catch (Exception e) {
@@ -274,6 +278,9 @@ public class VehicleApiService {
                 CacheUpdateContext context = CacheUpdateContext.fullRefresh();
                 vehicleCacheService.updateCache(vehicles, context);
                 log.info("Cache forçadamente atualizado - {} registros", vehicles.size());
+            } else {
+                log.info("API vazia no refresh manual - tocando api_sync_date");
+                vehicleCacheService.touchSyncDates(LocalDateTime.now());
             }
 
         } catch (Exception e) {
