@@ -188,118 +188,6 @@ public class VehicleController {
         }
     }
 
-    @GetMapping("/debug/busca-alternativa")
-    @Operation(summary = "Debug: testar busca alternativa por placa")
-    public ResponseEntity<Map<String, Object>> debugBuscaAlternativa(
-            @RequestParam(required = false) String placa) {
-        try {
-            if (placa == null || placa.trim().isEmpty()) {
-                return ResponseEntity.badRequest().body(Map.of(
-                    "erro", "Parâmetro 'placa' é obrigatório",
-                    "exemplo", "/debug/busca-alternativa?placa=PSS0O37"
-                ));
-            }
-            
-            Map<String, Object> debug = new HashMap<>();
-            debug.put("placaTestada", placa);
-            
-            // Primeiro, busca normal
-            log.info("=== TESTE DE BUSCA NORMAL ===");
-            PageDTO<VehicleDTO> resultadoNormal = vehicleApiService.getVehiclesWithFallback(
-                null, null, null, null, null, null, null, null, null,
-                placa, null, null, 0, 25, "id", "asc"
-            );
-            
-            debug.put("buscaNormal", Map.of(
-                "encontrados", resultadoNormal.getTotalElements(),
-                "resultados", resultadoNormal.getContent().size()
-            ));
-            
-            // Agora, busca alternativa direta
-            log.info("=== TESTE DE BUSCA ALTERNATIVA ===");
-            org.springframework.data.domain.Pageable pageable = 
-                org.springframework.data.domain.PageRequest.of(0, 25);
-            PageDTO<VehicleDTO> resultadoAlternativo = vehicleCacheService.searchByPlacaAlternative(placa, pageable);
-            
-            debug.put("buscaAlternativa", Map.of(
-                "encontrados", resultadoAlternativo.getTotalElements(),
-                "resultados", resultadoAlternativo.getContent().size()
-            ));
-            
-            // Mostrar detalhes dos resultados encontrados
-            if (!resultadoAlternativo.getContent().isEmpty()) {
-                List<Map<String, Object>> detalhes = new ArrayList<>();
-                for (VehicleDTO veiculo : resultadoAlternativo.getContent()) {
-                    detalhes.add(Map.of(
-                        "placaEncontrada", veiculo.placa(),
-                        "credor", veiculo.credor(),
-                        "contrato", veiculo.contrato(),
-                        "modelo", veiculo.modelo()
-                    ));
-                }
-                debug.put("detalhesEncontrados", detalhes);
-            }
-            
-            return ResponseEntity.ok(debug);
-            
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Map.of(
-                "erro", e.getMessage(),
-                "stack", e.getClass().getSimpleName()
-            ));
-        }
-    }
-
-    @GetMapping("/debug/decrypt-placas")
-    @Operation(summary = "Debug: descriptografar placas do banco")
-    public ResponseEntity<Map<String, Object>> debugDecryptPlacas() {
-        try {
-            Map<String, Object> debug = new HashMap<>();
-            
-            // Buscar algumas placas do cache para testar descriptografia
-            PageDTO<VehicleDTO> todosVeiculos = vehicleApiService.getVehiclesWithFallback(
-                null, null, null, null, null, null, null, null, null,
-                null, null, null, 0, 5, "id", "asc"
-            );
-            
-            debug.put("totalVeiculosNaBase", todosVeiculos.getTotalElements());
-            
-            // Lista para armazenar resultados de descriptografia
-            List<Map<String, Object>> placasTestadas = new ArrayList<>();
-            
-            for (VehicleDTO veiculo : todosVeiculos.getContent()) {
-                Map<String, Object> placaTeste = new HashMap<>();
-                placaTeste.put("placaDescriptografada", veiculo.placa());
-                placaTeste.put("credor", veiculo.credor());
-                placaTeste.put("modelo", veiculo.modelo());
-                
-                // Testar se conseguimos criptografar novamente e se bate
-                if (veiculo.placa() != null && !"N/A".equals(veiculo.placa())) {
-                    placaTeste.put("placaOriginal", veiculo.placa());
-                    placaTeste.put("tamanhoPlaca", veiculo.placa().length());
-                }
-                
-                placasTestadas.add(placaTeste);
-            }
-            
-            debug.put("placasNoCache", placasTestadas);
-            
-            // Teste específico: tentar criptografar PSS0O37 e ver se bate com alguma do banco
-            debug.put("testePSS0O37", Map.of(
-                "placa", "PSS0O37",
-                "explicacao", "Vamos comparar se PSS0O37 criptografado bate com alguma placa do banco"
-            ));
-            
-            return ResponseEntity.ok(debug);
-            
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Map.of(
-                "erro", e.getMessage(),
-                "stack", e.getClass().getSimpleName()
-            ));
-        }
-    }
-
     @GetMapping("/debug/crypto/{placa}")
     @Operation(summary = "Debug de criptografia de placa (temporário)")
     public ResponseEntity<Map<String, Object>> debugCrypto(@PathVariable String placa) {
@@ -330,6 +218,79 @@ public class VehicleController {
             return ResponseEntity.internalServerError().body(Map.of(
                 "erro", e.getMessage(),
                 "placa", placa
+            ));
+        }
+    }
+
+    @GetMapping("/debug/decrypt-placas")
+    @Operation(summary = "Listar placas descriptografadas do cache (temporário)")
+    public ResponseEntity<Map<String, Object>> debugDecryptPlacas() {
+        try {
+            // Buscar algumas placas do cache para verificar descriptografia
+            var result = vehicleCacheService.debugDecryptedPlates(10);
+            return ResponseEntity.ok(Map.of(
+                "placasDescriptografadas", result,
+                "timestamp", java.time.LocalDateTime.now()
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                "erro", e.getMessage()
+            ));
+        }
+    }
+
+    @GetMapping("/debug/busca-alternativa")
+    @Operation(summary = "Testar busca alternativa vs normal (temporário)")
+    public ResponseEntity<Map<String, Object>> debugBuscaAlternativa(
+            @RequestParam String placa) {
+        try {
+            Map<String, Object> debug = new HashMap<>();
+            
+            // Busca normal (encrypted)
+            var buscaNormal = vehicleCacheService.searchByPlacaNormal(placa);
+            
+            // Busca alternativa (decrypt + compare)
+            var buscaAlternativa = vehicleCacheService.searchByPlacaAlternative(placa, 
+                org.springframework.data.domain.PageRequest.of(0, 10));
+            
+            debug.put("placa", placa);
+            debug.put("buscaNormal", Map.of(
+                "encontrados", buscaNormal.size(),
+                "resultado", buscaNormal.stream().limit(3).toList()
+            ));
+            debug.put("buscaAlternativa", Map.of(
+                "encontrados", buscaAlternativa.getTotalElements(),
+                "resultado", buscaAlternativa.getContent().stream().limit(3).toList()
+            ));
+            
+            return ResponseEntity.ok(debug);
+            
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                "erro", e.getMessage(),
+                "placa", placa
+            ));
+        }
+    }
+
+    @GetMapping("/debug/cache-summary")
+    @Operation(summary = "Resumo completo do cache (temporário)")
+    public ResponseEntity<Map<String, Object>> debugCacheSummary() {
+        try {
+            Map<String, Object> summary = new HashMap<>();
+            
+            var cacheStatus = vehicleCacheService.getCacheStatus();
+            summary.put("status", cacheStatus);
+            
+            // Adicionar estatísticas de duplicatas
+            var duplicateStats = vehicleCacheService.getDuplicateStats();
+            summary.put("duplicateStats", duplicateStats);
+            
+            return ResponseEntity.ok(summary);
+            
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                "erro", e.getMessage()
             ));
         }
     }

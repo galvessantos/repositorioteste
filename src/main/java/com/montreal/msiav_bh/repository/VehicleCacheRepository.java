@@ -80,5 +80,14 @@ public interface VehicleCacheRepository extends JpaRepository<VehicleCache, Long
                                             @Param("statusApreensao") String statusApreensao,
                                             Pageable pageable);
 
+    // Métodos para estatísticas de duplicatas
+    @Query("SELECT COUNT(DISTINCT v.placa) FROM VehicleCache v")
+    long countDistinctByPlaca();
+
+    @Query("SELECT COUNT(DISTINCT v.contrato) FROM VehicleCache v")
+    long countDistinctByContrato();
+
+    @Query("SELECT DATE(v.apiSyncDate) as syncDate, COUNT(v) as count FROM VehicleCache v GROUP BY DATE(v.apiSyncDate) ORDER BY syncDate DESC")
+    List<Object[]> findSyncDateDistribution();
 
 }

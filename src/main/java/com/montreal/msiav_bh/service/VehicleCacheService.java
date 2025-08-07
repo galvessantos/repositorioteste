@@ -253,6 +253,114 @@ public class VehicleCacheService {
                 .build();
     }
 
+    /**
+     * DEBUG: Busca normal por placa (método atual usando criptografia)
+     */
+    public List<VehicleDTO> searchByPlacaNormal(String placa) {
+        log.debug("=== BUSCA NORMAL POR PLACA ===");
+        log.debug("Placa original: {}", placa);
+        
+        try {
+            String encryptedPlaca = cryptoService.encrypt(placa);
+            log.debug("Placa criptografada: {}", encryptedPlaca);
+            
+            List<VehicleCache> vehicles = vehicleCacheRepository.findByPlacaOrderByIdDesc(encryptedPlaca);
+            log.debug("Registros encontrados na busca normal: {}", vehicles.size());
+            
+            return vehicles.stream()
+                    .map(vehicleCacheMapper::toDTO)
+                    .toList();
+        } catch (Exception e) {
+            log.error("Erro na busca normal por placa", e);
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * DEBUG: Listar placas descriptografadas para verificação
+     */
+    public List<Map<String, Object>> debugDecryptedPlates(int limit) {
+        log.debug("=== DEBUG PLACAS DESCRIPTOGRAFADAS ===");
+        
+        List<VehicleCache> vehicles = vehicleCacheRepository.findAll(PageRequest.of(0, limit)).getContent();
+        List<Map<String, Object>> result = new ArrayList<>();
+        
+        for (VehicleCache vehicle : vehicles) {
+            try {
+                String decryptedPlaca = cryptoService.decrypt(vehicle.getPlaca());
+                String decryptedContrato = cryptoService.decrypt(vehicle.getContrato());
+                
+                Map<String, Object> debug = new HashMap<>();
+                debug.put("id", vehicle.getId());
+                debug.put("placaCriptografada", vehicle.getPlaca().substring(0, Math.min(20, vehicle.getPlaca().length())) + "...");
+                debug.put("placaDescriptografada", decryptedPlaca);
+                debug.put("contratoDescriptografado", decryptedContrato);
+                debug.put("credor", vehicle.getCredor());
+                debug.put("modelo", vehicle.getModelo());
+                debug.put("apiSyncDate", vehicle.getApiSyncDate());
+                
+                result.add(debug);
+                
+            } catch (Exception e) {
+                log.warn("Erro ao descriptografar registro ID {}: {}", vehicle.getId(), e.getMessage());
+                Map<String, Object> debug = new HashMap<>();
+                debug.put("id", vehicle.getId());
+                debug.put("erro", "Falha na descriptografia: " + e.getMessage());
+                result.add(debug);
+            }
+        }
+        
+        log.debug("Processados {} registros para debug", result.size());
+        return result;
+    }
+
+    /**
+     * DEBUG: Estatísticas de duplicatas no cache
+     */
+    public Map<String, Object> getDuplicateStats() {
+        log.debug("=== COLETANDO ESTATÍSTICAS DE DUPLICATAS ===");
+        
+        Map<String, Object> stats = new HashMap<>();
+        
+        try {
+            // Total de registros
+            long totalRecords = vehicleCacheRepository.count();
+            stats.put("totalRecords", totalRecords);
+            
+            // Contar registros únicos por placa criptografada
+            long uniquePlates = vehicleCacheRepository.countDistinctByPlaca();
+            long platesDuplicates = totalRecords - uniquePlates;
+            stats.put("uniquePlates", uniquePlates);
+            stats.put("platesDuplicates", platesDuplicates);
+            
+            // Contar registros únicos por contrato criptografado
+            long uniqueContracts = vehicleCacheRepository.countDistinctByContrato();
+            long contractsDuplicates = totalRecords - uniqueContracts;
+            stats.put("uniqueContracts", uniqueContracts);
+            stats.put("contractsDuplicates", contractsDuplicates);
+            
+            // Verificar distribuição por data de sync
+            List<Object[]> syncDistribution = vehicleCacheRepository.findSyncDateDistribution();
+            List<Map<String, Object>> distribution = new ArrayList<>();
+            for (Object[] row : syncDistribution) {
+                Map<String, Object> entry = new HashMap<>();
+                entry.put("syncDate", row[0]);
+                entry.put("count", row[1]);
+                distribution.add(entry);
+            }
+            stats.put("syncDistribution", distribution);
+            
+            log.debug("Estatísticas calculadas: {} total, {} placas únicas, {} contratos únicos", 
+                     totalRecords, uniquePlates, uniqueContracts);
+            
+        } catch (Exception e) {
+            log.error("Erro ao calcular estatísticas de duplicatas", e);
+            stats.put("erro", "Falha ao calcular estatísticas: " + e.getMessage());
+        }
+        
+        return stats;
+    }
+
     public void updateCacheThreadSafe(List<VehicleDTO> vehicles, CacheUpdateContext context) {
         cacheLock.lock();
         try {
