@@ -220,6 +220,7 @@ public class VehicleCacheService {
 
         for (VehicleDTO dto : vehicles) {
             try {
+                String placaDescriptografada = cryptoService.decryptPlaca(dto.placa());
                 Optional<VehicleCache> existing = findExistingVehicle(dto);
 
                 if (existing.isPresent()) {
@@ -230,37 +231,38 @@ public class VehicleCacheService {
                         VehicleCache updatedEntity = updateExistingVehicle(existingEntity, dto, syncDate);
                         vehicleCacheRepository.save(updatedEntity);
                         updated++;
-                        log.debug("✓ Veículo ATUALIZADO (dados mudaram): placa={}", cryptoService.decryptPlaca(dto.placa()));
+                        log.debug("✓ Veículo ATUALIZADO (dados mudaram): placa={}", placaDescriptografada);
                     } else {
                         // Apenas atualiza a data de sincronização
                         existingEntity.setApiSyncDate(syncDate);
                         vehicleCacheRepository.save(existingEntity);
                         noChangesFound++;
-                        log.trace("⚡ Veículo SEM MUDANÇAS (só sync date): placa={}", cryptoService.decryptPlaca(dto.placa()));
+                        log.trace("⚡ Veículo SEM MUDANÇAS (só sync date): placa={}", placaDescriptografada);
                     }
                 } else {
                     VehicleCache newEntity = vehicleCacheMapper.toEntity(dto, syncDate);
                     vehicleCacheRepository.save(newEntity);
                     inserted++;
-                    log.debug("➕ NOVO veículo inserido: placa={}", cryptoService.decryptPlaca(dto.placa()));
+                    log.debug("➕ NOVO veículo inserido: placa={}", placaDescriptografada);
                 }
             } catch (Exception e) {
+                String placaDescriptografada = cryptoService.decryptPlaca(dto.placa());
                 if (e.getMessage() != null &&
                         (e.getMessage().contains("constraint") ||
                                 e.getMessage().contains("duplicate") ||
                                 e.getMessage().contains("unique"))) {
                     log.debug("⚠️ Registro duplicado ignorado (constraint violation): placa={}, erro={}",
-                            cryptoService.decryptPlaca(dto.placa()), e.getMessage().substring(0, Math.min(100, e.getMessage().length())));
+                            placaDescriptografada, e.getMessage().substring(0, Math.min(100, e.getMessage().length())));
                     duplicateSkipped++;
                 } else if (e.getMessage() != null &&
                         e.getMessage().contains("value too long for type character varying")) {
                     log.error("ERRO DE TAMANHO DE CAMPO: Algum campo excede o limite do banco de dados");
-                    log.error("Placa afetada: {}", cryptoService.decryptPlaca(dto.placa()));
+                    log.error("Placa afetada: {}", placaDescriptografada);
                     log.error("Este erro indica que os campos criptografados são muito longos");
                     log.error("SOLUÇÃO: Execute a migração do banco: ALTER TABLE vehicle_cache ALTER COLUMN contrato TYPE TEXT, ALTER TABLE vehicle_cache ALTER COLUMN placa TYPE TEXT;");
                     throw new RuntimeException("Campo muito longo - necessária migração do banco de dados", e);
                 } else {
-                    log.error("Erro inesperado ao processar veículo placa={}: {}", cryptoService.decryptPlaca(dto.placa()), e.getMessage());
+                    log.error("Erro inesperado ao processar veículo placa={}: {}", placaDescriptografada, e.getMessage());
                     throw e;
                 }
             }
@@ -282,46 +284,27 @@ public class VehicleCacheService {
         log.debug("Procurando veículo existente para contrato:{}, placa:{}, protocolo:{}",
                 dto.contrato(), dto.placa(), dto.protocolo());
 
-        // DTO fields are ALREADY ENCRYPTED from the VehicleInquiryMapper
-        // No need to decrypt them - they are ready for comparison with DB encrypted fields
-        String dtoPlacaEncrypted = dto.placa();
-        String dtoContratoEncrypted = dto.contrato();
+        // Decrypt the DTO's encrypted fields for comparison
+        String dtoPlacaDecrypted = cryptoService.decryptPlaca(dto.placa());
+        String dtoContratoDecrypted = cryptoService.decryptContrato(dto.contrato());
 
-        // 1. PRIMEIRO: Busca por placa criptografada diretamente (chave principal - sempre preenchida)
-        if (dtoPlacaEncrypted != null && !"N/A".equals(dtoPlacaEncrypted) && !dtoPlacaEncrypted.trim().isEmpty()) {
-            log.debug("🔍 Buscando por placa criptografada diretamente");
-            Optional<VehicleCache> byPlaca = vehicleCacheRepository.findByPlaca(dtoPlacaEncrypted);
+        // 1. PRIMEIRO: Busca por placa descriptografada (chave principal - sempre preenchida)
+        if (dtoPlacaDecrypted != null && !"N/A".equals(dtoPlacaDecrypted) && !dtoPlacaDecrypted.trim().isEmpty()) {
+            log.debug("🔍 Buscando por placa descriptografada: {}", dtoPlacaDecrypted);
+            Optional<VehicleCache> byPlaca = findByDecryptedPlaca(dtoPlacaDecrypted);
             if (byPlaca.isPresent()) {
-                log.debug("✅ Veículo encontrado por placa criptografada direta");
+                log.debug("✅ Veículo encontrado por placa descriptografada");
                 return byPlaca;
-            }
-            
-            // Fallback: busca descriptografando (para compatibilidade com dados antigos)
-            log.debug("🔍 Fallback: buscando por placa descriptografada");
-            String dtoPlacaDecrypted = cryptoService.decryptPlaca(dtoPlacaEncrypted);
-            Optional<VehicleCache> byPlacaDecrypted = findByDecryptedPlaca(dtoPlacaDecrypted);
-            if (byPlacaDecrypted.isPresent()) {
-                log.debug("✅ Veículo encontrado por placa descriptografada (fallback)");
-                return byPlacaDecrypted;
             }
         }
 
-        // 2. SEGUNDO: Busca por contrato criptografado diretamente (fallback importante)
-        if (dtoContratoEncrypted != null && !"N/A".equals(dtoContratoEncrypted) && !dtoContratoEncrypted.trim().isEmpty()) {
-            log.debug("🔍 Buscando por contrato criptografado diretamente");
-            Optional<VehicleCache> byContrato = vehicleCacheRepository.findByContrato(dtoContratoEncrypted);
+        // 2. SEGUNDO: Busca por contrato descriptografado (fallback importante)
+        if (dtoContratoDecrypted != null && !"N/A".equals(dtoContratoDecrypted) && !dtoContratoDecrypted.trim().isEmpty()) {
+            log.debug("🔍 Buscando por contrato descriptografado: {}", dtoContratoDecrypted);
+            Optional<VehicleCache> byContrato = findByDecryptedContrato(dtoContratoDecrypted);
             if (byContrato.isPresent()) {
-                log.debug("✅ Veículo encontrado por contrato criptografado direto");
+                log.debug("✅ Veículo encontrado por contrato descriptografado");
                 return byContrato;
-            }
-            
-            // Fallback: busca descriptografando (para compatibilidade com dados antigos)
-            log.debug("🔍 Fallback: buscando por contrato descriptografado");
-            String dtoContratoDecrypted = cryptoService.decryptContrato(dtoContratoEncrypted);
-            Optional<VehicleCache> byContratoDecrypted = findByDecryptedContrato(dtoContratoDecrypted);
-            if (byContratoDecrypted.isPresent()) {
-                log.debug("✅ Veículo encontrado por contrato descriptografado (fallback)");
-                return byContratoDecrypted;
             }
         }
 
@@ -449,38 +432,17 @@ public class VehicleCacheService {
      */
     private boolean hasDataChanges(VehicleCache existing, VehicleDTO dto) {
         try {
-            // DTO fields are ALREADY ENCRYPTED from the VehicleInquiryMapper
-            // Entity fields are ALSO ENCRYPTED in the database
-            
-            // Para campos criptografados, comparamos diretamente primeiro (mais eficiente)
-            boolean contratoChanged = !Objects.equals(existing.getContrato(), dto.contrato());
-            boolean placaChanged = !Objects.equals(existing.getPlaca(), dto.placa());
-            
-            // Se os campos criptografados são diferentes, tentamos comparar os valores descriptografados
-            // para garantir que não é apenas diferença de criptografia não-determinística
-            if (contratoChanged) {
-                try {
-                    String existingContratoDecrypted = cryptoService.decryptContrato(existing.getContrato());
-                    String dtoContratoDecrypted = cryptoService.decryptContrato(dto.contrato());
-                    contratoChanged = !Objects.equals(existingContratoDecrypted, dtoContratoDecrypted);
-                } catch (Exception e) {
-                    log.debug("Erro ao comparar contratos descriptografados, assumindo diferença: {}", e.getMessage());
-                    // Mantém contratoChanged = true
-                }
-            }
-            
-            if (placaChanged) {
-                try {
-                    String existingPlacaDecrypted = cryptoService.decryptPlaca(existing.getPlaca());
-                    String dtoPlacaDecrypted = cryptoService.decryptPlaca(dto.placa());
-                    placaChanged = !Objects.equals(existingPlacaDecrypted, dtoPlacaDecrypted);
-                } catch (Exception e) {
-                    log.debug("Erro ao comparar placas descriptografadas, assumindo diferença: {}", e.getMessage());
-                    // Mantém placaChanged = true
-                }
-            }
-            
-            // Compara campos não criptografados normalmente
+            // Descriptografa os dados existentes para comparação
+            String existingContrato = cryptoService.decryptContrato(existing.getContrato());
+            String existingPlaca = cryptoService.decryptPlaca(existing.getPlaca());
+
+            // Decrypt the DTO's fields for comparison
+            String dtoContratoDecrypted = cryptoService.decryptContrato(dto.contrato());
+            String dtoPlacaDecrypted = cryptoService.decryptPlaca(dto.placa());
+
+            // Compara todos os campos relevantes
+            boolean contratoChanged = !Objects.equals(existingContrato, dtoContratoDecrypted);
+            boolean placaChanged = !Objects.equals(existingPlaca, dtoPlacaDecrypted);
             boolean credorChanged = !Objects.equals(existing.getCredor(), dto.credor());
             boolean dataPedidoChanged = !Objects.equals(existing.getDataPedido(), dto.dataPedido());
             boolean modeloChanged = !Objects.equals(existing.getModelo(), dto.modelo());
@@ -497,17 +459,9 @@ public class VehicleCacheService {
                                protocoloChanged || etapaAtualChanged || statusApreensaoChanged || ultimaMovimentacaoChanged;
             
             if (hasChanges) {
-                // Para logs, tentamos descriptografar a placa para mostrar qual veículo está sendo alterado
-                String placaParaLog = "***ENCRYPTED***";
-                try {
-                    placaParaLog = cryptoService.decryptPlaca(dto.placa());
-                } catch (Exception e) {
-                    // Ignora erros de descriptografia para log
-                }
-                
                 log.debug("Mudanças detectadas na placa {}: contrato={}, placa={}, credor={}, dataPedido={}, " +
                          "modelo={}, uf={}, cidade={}, cpf={}, etapa={}, status={}, ultimaMov={}", 
-                         placaParaLog, contratoChanged, placaChanged, credorChanged, dataPedidoChanged,
+                         dtoPlacaDecrypted, contratoChanged, placaChanged, credorChanged, dataPedidoChanged,
                          modeloChanged, ufChanged, cidadeChanged, cpfDevedorChanged, 
                          etapaAtualChanged, statusApreensaoChanged, ultimaMovimentacaoChanged);
             }
@@ -515,7 +469,8 @@ public class VehicleCacheService {
             return hasChanges;
             
         } catch (Exception e) {
-            log.warn("Erro ao comparar dados do veículo: {} - assumindo que há mudanças", e.getMessage());
+            log.warn("Erro ao comparar dados do veículo placa={}: {} - assumindo que há mudanças", 
+                    cryptoService.decryptPlaca(dto.placa()), e.getMessage());
             return true; // Em caso de erro, assume que há mudanças para ser conservativo
         }
     }

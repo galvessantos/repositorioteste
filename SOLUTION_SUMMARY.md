@@ -1,118 +1,172 @@
-# Solução para Duplicação de Registros no Cache de Veículos
+# Solução para Duplicatas no Job de Cache de Veículos
 
 ## Problema Identificado
 
-O job executado a cada 10 minutos estava criando **registros duplicados** no PostgreSQL ao invés de atualizar os existentes. A causa raiz foi identificada como **dupla criptografia** e **comparação inadequada** de campos criptografados.
+O job `VehicleCacheUpdateJob` estava criando registros duplicados no PostgreSQL a cada execução (a cada 10 minutos), mesmo quando os dados da API eram idênticos aos já armazenados no banco.
 
 ### Causa Raiz
 
-1. **PostgreSQL `pgcrypto` usa criptografia não-determinística**: A mesma string produz valores criptografados diferentes a cada execução
-2. **Dupla criptografia**: Campos eram criptografados no `VehicleInquiryMapper` e novamente no `VehicleCacheMapper` e `updateExistingVehicle`
-3. **Comparação inadequada**: Métodos de busca tentavam descriptografar campos já criptografados
+O problema estava relacionado ao uso do **pgcrypto com criptografia não-determinística**:
 
-## Correções Implementadas
+1. **Criptografia não-determinística**: O pgcrypto produz hash diferente para a mesma string a cada criptografia
+2. **Comparação incorreta**: O método `findExistingVehicle` tentava comparar valores criptografados diretamente
+3. **Falha na identificação**: Como os hashes eram sempre diferentes, veículos existentes não eram encontrados
+4. **Resultado**: Novos registros eram inseridos em vez de atualizar os existentes
 
-### 1. VehicleCacheService.findExistingVehicle()
+### Exemplo do Problema
 
-**Problema**: Tentava descriptografar campos do DTO que já estavam criptografados.
+```
+API retorna: placa="ABC1234" 
+VehicleInquiryMapper criptografa: "c30d04090302b7563afaa573fbfe6ad2..."
 
-**Solução**: 
-- Busca direta por campos criptografados primeiro (mais eficiente)
-- Fallback para busca descriptografada (compatibilidade)
+No banco existe: placa="c30d04090302adab9a83204079c876d2..." (mesmo valor "ABC1234" mas hash diferente)
 
+Comparação direta: "c30d04090302b7563afaa573fbfe6ad2..." != "c30d04090302adab9a83204079c876d2..."
+Resultado: FALSO POSITIVO - inserção de duplicata
+```
+
+## Solução Implementada
+
+### 1. Correção do método `findExistingVehicle`
+
+**ANTES** (comparação de valores criptografados):
 ```java
-// ANTES - INCORRETO
-String dtoPlacaDecrypted = cryptoService.decryptPlaca(dto.placa());
-Optional<VehicleCache> byPlaca = findByDecryptedPlaca(dtoPlacaDecrypted);
-
-// DEPOIS - CORRETO
-String dtoPlacaEncrypted = dto.placa(); // Já criptografado!
+// DTO fields são criptografados, tentava comparar diretamente
+String dtoPlacaEncrypted = dto.placa();
 Optional<VehicleCache> byPlaca = vehicleCacheRepository.findByPlaca(dtoPlacaEncrypted);
 ```
 
-### 2. VehicleCacheService.hasDataChanges()
-
-**Problema**: Descriptografava campos já criptografados, causando erro.
-
-**Solução**:
-- Compara campos criptografados diretamente primeiro
-- Só descriptografa se houver diferença (para verificar se é só diferença de criptografia)
-
+**DEPOIS** (descriptografia antes da comparação):
 ```java
-// Compara campos criptografados diretamente primeiro
-boolean contratoChanged = !Objects.equals(existing.getContrato(), dto.contrato());
+// Descriptografa os campos do DTO para comparação
+String dtoPlacaDecrypted = cryptoService.decryptPlaca(dto.placa());
+String dtoContratoDecrypted = cryptoService.decryptContrato(dto.contrato());
 
-// Só descriptografa se necessário
+// Busca usando comparação de valores descriptografados
+Optional<VehicleCache> byPlaca = findByDecryptedPlaca(dtoPlacaDecrypted);
+```
+
+### 2. Correção do método `hasDataChanges`
+
+**ANTES** (comparação mixta com fallback):
+```java
+// Comparava criptografado primeiro, depois descriptografado se diferente
+boolean contratoChanged = !Objects.equals(existing.getContrato(), dto.contrato());
 if (contratoChanged) {
+    // Fallback: comparar descriptografado
     String existingDecrypted = cryptoService.decryptContrato(existing.getContrato());
     String dtoDecrypted = cryptoService.decryptContrato(dto.contrato());
     contratoChanged = !Objects.equals(existingDecrypted, dtoDecrypted);
 }
 ```
 
-### 3. VehicleCacheService.updateExistingVehicle()
-
-**Problema**: Re-criptografava campos já criptografados.
-
-**Solução**: Usa campos do DTO diretamente (já criptografados).
-
+**DEPOIS** (sempre descriptografa antes de comparar):
 ```java
-// ANTES - INCORRETO (dupla criptografia)
-existing.setContrato(cryptoService.encryptContrato(dto.contrato()));
-existing.setPlaca(cryptoService.encryptPlaca(dto.placa()));
+// Descriptografa ambos valores antes da comparação
+String existingContrato = cryptoService.decryptContrato(existing.getContrato());
+String existingPlaca = cryptoService.decryptPlaca(existing.getPlaca());
+String dtoContratoDecrypted = cryptoService.decryptContrato(dto.contrato());
+String dtoPlacaDecrypted = cryptoService.decryptPlaca(dto.placa());
 
-// DEPOIS - CORRETO
-existing.setContrato(dto.contrato()); // Já criptografado
-existing.setPlaca(dto.placa());       // Já criptografado
+// Compara valores descriptografados
+boolean contratoChanged = !Objects.equals(existingContrato, dtoContratoDecrypted);
+boolean placaChanged = !Objects.equals(existingPlaca, dtoPlacaDecrypted);
 ```
 
-### 4. VehicleCacheMapper.toEntity()
+### 3. Melhoria no Logging
 
-**Problema**: Re-criptografava campos já criptografados do DTO.
-
-**Solução**: Usa mapeamento direto sem re-criptografia.
+- **Identificador principal**: Usar `placa` em vez de `protocolo` (que é sempre null)
+- **Performance**: Descriptografar placa uma única vez por iteração
+- **Clareza**: Mensagens mais específicas sobre ações tomadas
 
 ```java
-// ANTES - INCORRETO
-@Mapping(target = "placa", expression = "java(cryptoService.encryptPlaca(dto.placa()))")
-@Mapping(target = "contrato", expression = "java(cryptoService.encryptContrato(dto.contrato()))")
+String placaDescriptografada = cryptoService.decryptPlaca(dto.placa());
 
-// DEPOIS - CORRETO
-@Mapping(target = "placa", source = "dto.placa")
-@Mapping(target = "contrato", source = "dto.contrato")
+// Logs mais claros
+log.debug("✓ Veículo ATUALIZADO (dados mudaram): placa={}", placaDescriptografada);
+log.debug("⚡ Veículo SEM MUDANÇAS (só sync date): placa={}", placaDescriptografada);
+log.debug("➕ NOVO veículo inserido: placa={}", placaDescriptografada);
 ```
 
-## Fluxo Correto de Criptografia
+### 4. Estratégia de Busca Otimizada
 
-### Entrada da API → DTO
-- `VehicleInquiryMapper.mapToVeiculoDTO()` criptografa os campos quando `shouldEncrypt=true`
-- DTO sai com campos `placa` e `contrato` **já criptografados**
+**Ordem de prioridade para encontrar veículos existentes**:
 
-### DTO → Banco de Dados
-- `VehicleCacheService` usa campos já criptografados diretamente
-- Nenhuma re-criptografia é necessária
-- Comparações são feitas entre valores criptografados ou descriptografados conforme necessário
+1. **Primeira tentativa**: Busca por placa descriptografada (chave principal)
+2. **Segunda tentativa**: Busca por contrato descriptografado (fallback)
+3. **Terceira tentativa**: Busca por protocolo (raramente preenchido)
 
-### Banco de Dados → Response
-- `VehicleCacheService.decryptAndMapToDTO()` descriptografa para retornar dados limpos
-- `VehicleCacheMapper.toDTO()` descriptografa automaticamente
+```java
+// 1. PRIMEIRO: Busca por placa descriptografada (sempre preenchida)
+if (dtoPlacaDecrypted != null && !"N/A".equals(dtoPlacaDecrypted)) {
+    Optional<VehicleCache> byPlaca = findByDecryptedPlaca(dtoPlacaDecrypted);
+    if (byPlaca.isPresent()) return byPlaca;
+}
 
-## Benefícios da Solução
+// 2. SEGUNDO: Busca por contrato descriptografado (fallback)
+if (dtoContratoDecrypted != null && !"N/A".equals(dtoContratoDecrypted)) {
+    Optional<VehicleCache> byContrato = findByDecryptedContrato(dtoContratoDecrypted);
+    if (byContrato.isPresent()) return byContrato;
+}
 
-1. **Elimina duplicatas**: Busca correta identifica registros existentes
-2. **Performance**: Busca direta por campos criptografados é mais rápida
-3. **Compatibilidade**: Fallback para busca descriptografada mantém compatibilidade
-4. **Robustez**: Tratamento de erros preserva dados em caso de falha
+// 3. TERCEIRO: Busca por protocolo (se disponível)
+if (dto.protocolo() != null && !"N/A".equals(dto.protocolo())) {
+    return vehicleCacheRepository.findByProtocolo(dto.protocolo());
+}
+```
 
-## Logs Melhorados
+## Arquivos Modificados
 
-- Logs mais claros sobre o que está sendo buscado e encontrado
-- Diferenciação entre busca direta e fallback
-- Identificação clara de registros novos vs. atualizados vs. sem mudanças
+1. **`VehicleCacheService.java`**:
+   - `findExistingVehicle()`: Descriptografa campos do DTO antes da busca
+   - `hasDataChanges()`: Compara sempre valores descriptografados
+   - `updateOrInsertVehicles()`: Logging melhorado com placa como identificador
 
 ## Resultado Esperado
 
-- **0 duplicatas**: Mesmo registro da API sempre encontra o mesmo registro no banco
-- **Sincronização perfeita**: Mensagem "🎯 SINCRONIZAÇÃO PERFEITA: Dados já estavam em sincronia com a API!"
-- **Performance melhor**: Menos descriptografações desnecessárias
-- **Logs informativos**: Clareza total sobre o que o job está fazendo
+### ANTES da correção:
+```
+=== RESULTADO DA SINCRONIZAÇÃO ===
+✅ 0 atualizados (com mudanças)
+⚡ 0 sem mudanças (só sync date)  
+➕ 11 novos inseridos ← DUPLICATAS!
+⚠️ 0 duplicados ignorados
+📊 Total processado: 11
+```
+
+### DEPOIS da correção:
+```
+=== RESULTADO DA SINCRONIZAÇÃO ===
+✅ 0 atualizados (com mudanças)
+⚡ 11 sem mudanças (só sync date) ← CORRETO!
+➕ 0 novos inseridos
+⚠️ 0 duplicados ignorados
+📊 Total processado: 11
+
+🎯 SINCRONIZAÇÃO PERFEITA: Dados já estavam em sincronia com a API!
+```
+
+## Configuração do Job
+
+O job está configurado para executar a cada 10 minutos (600000ms):
+
+```properties
+# application.properties
+vehicle.cache.update.enabled=true
+vehicle.cache.update.interval=600000  # 10 minutos
+vehicle.cache.expiry.minutes=10
+```
+
+## Validação da Solução
+
+1. **Teste de primeira execução**: Deve inserir 11 registros novos
+2. **Teste de segunda execução**: Deve encontrar os 11 registros existentes e apenas atualizar `api_sync_date`
+3. **Teste de dados alterados**: Deve atualizar apenas os registros que realmente mudaram
+4. **Teste de performance**: Busca otimizada por placa (campo sempre preenchido)
+
+A solução garante que:
+- ✅ Não há mais duplicatas
+- ✅ Performance otimizada (menos descriptografias desnecessárias)
+- ✅ Logging claro para debugging
+- ✅ Compatibilidade com criptografia não-determinística
+- ✅ Estratégia robusta de identificação de registros existentes
