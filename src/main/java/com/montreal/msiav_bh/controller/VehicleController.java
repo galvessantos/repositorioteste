@@ -3,6 +3,7 @@ package com.montreal.msiav_bh.controller;
 import com.montreal.msiav_bh.dto.PageDTO;
 import com.montreal.msiav_bh.dto.VehicleDTO;
 import com.montreal.msiav_bh.dto.response.QueryDetailResponseDTO;
+import com.montreal.msiav_bh.job.VehicleCacheUpdateJob;
 import com.montreal.msiav_bh.service.VehicleApiService;
 import com.montreal.msiav_bh.service.VehicleCacheService;
 import com.montreal.msiav_bh.utils.exceptions.ValidationMessages;
@@ -14,6 +15,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -35,6 +37,14 @@ public class VehicleController {
 
     private final VehicleApiService vehicleApiService;
     private final VehicleCacheService vehicleCacheService;
+
+    private final VehicleCacheUpdateJob vehicleCacheUpdateJob;
+
+    @Value("${vehicle.cache.update.enabled:true}")
+    private boolean cacheUpdateEnabled;
+
+    @Value("${vehicle.cache.update.interval:600000}")
+    private long cacheUpdateInterval;
 
     @GetMapping
     @Operation(summary = "Buscar veículos (Database-First)")
@@ -247,6 +257,40 @@ public class VehicleController {
                     "status", "error",
                     "message", "Erro no debug",
                     "error", e.getMessage()
+            ));
+        }
+    }
+
+    @GetMapping("/job/status")
+    @Operation(summary = "Verificar status do job de atualização")
+    public ResponseEntity<Map<String, Object>> getJobStatus() {
+        Map<String, Object> status = new HashMap<>();
+
+        status.put("jobEnabled", cacheUpdateEnabled);
+        status.put("updateInterval", "${vehicle.cache.update.interval:600000}");
+
+        VehicleCacheService.CacheStatus cacheStatus = vehicleCacheService.getCacheStatus();
+        status.put("lastSync", cacheStatus.getLastSyncDate());
+        status.put("minutesSinceLastSync", cacheStatus.getMinutesSinceLastSync());
+        status.put("totalRecords", cacheStatus.getTotalRecords());
+
+        return ResponseEntity.ok(status);
+    }
+
+    @PostMapping("/job/trigger")
+    @Operation(summary = "Disparar job manualmente")
+    public ResponseEntity<Map<String, String>> triggerJob() {
+        try {
+            log.info("Disparando job manualmente via endpoint");
+            vehicleCacheUpdateJob.updateVehicleCache();
+            return ResponseEntity.ok(Map.of(
+                    "status", "success",
+                    "message", "Job disparado com sucesso"
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "status", "error",
+                    "message", e.getMessage()
             ));
         }
     }

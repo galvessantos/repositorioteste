@@ -296,12 +296,23 @@ public class VehicleInquiryMapper {
             return valor;
         }
 
+        if (isAlreadyEncrypted(valor)) {
+            logger.debug("Valor já está criptografado, retornando sem modificar");
+            return valor;
+        }
+
         try {
-            return cryptoUtil.encrypt(valor);
+            String encrypted = cryptoUtil.encrypt(valor);
+            logger.debug("Valor criptografado com sucesso: {} chars", encrypted != null ? encrypted.length() : 0);
+            return encrypted;
         } catch (Exception e) {
             logger.warn("Erro ao criptografar valor [{}]: {}", valor.length(), e.getMessage());
             return valor;
         }
+    }
+
+    private boolean isAlreadyEncrypted(String value) {
+        return value != null && value.length() >= 50 && value.matches("[a-fA-F0-9]+");
     }
 
     private String extractCityFromNotification(ConsultaNotificationResponseDTO.NotificationData notification) {

@@ -184,7 +184,7 @@ public class VehicleApiService {
 
             if (!vehicles.isEmpty()) {
                 CacheUpdateContext context = CacheUpdateContext.scheduledRefresh(searchStart, searchEnd);
-                vehicleCacheService.updateCache(vehicles, context);
+                vehicleCacheService.updateCacheThreadSafe(vehicles, context);
                 log.info("Cache atualizado em background com {} registros", vehicles.size());
             }
 

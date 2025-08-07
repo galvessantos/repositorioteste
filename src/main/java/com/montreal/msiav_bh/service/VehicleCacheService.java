@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -27,6 +28,8 @@ public class VehicleCacheService {
     private final VehicleCacheRepository vehicleCacheRepository;
     private final VehicleCacheMapper vehicleCacheMapper;
     private final VehicleCacheCryptoService cryptoService;
+
+    private final ReentrantLock cacheLock = new ReentrantLock();
 
     @Value("${vehicle.cache.expiry.minutes:10}")
     private int cacheExpiryMinutes;
@@ -116,6 +119,22 @@ public class VehicleCacheService {
         } catch (Exception e) {
             log.error("Erro ao descriptografar dados do veículo ID {}: {}", entity.getId(), e.getMessage());
             return vehicleCacheMapper.toDTO(entity);
+        }
+    }
+
+    @Transactional
+    public void updateCacheThreadSafe(List<VehicleDTO> vehicles, CacheUpdateContext context) {
+        cacheLock.lock();
+        try {
+            log.info("Atualizando cache de forma thread-safe com {} veículos. Contexto: {}",
+                    vehicles.size(), context);
+
+            cleanDuplicates();
+
+            updateCache(vehicles, context);
+
+        } finally {
+            cacheLock.unlock();
         }
     }
 
@@ -231,34 +250,44 @@ public class VehicleCacheService {
     }
 
     private Optional<VehicleCache> findExistingVehicle(VehicleDTO dto) {
-        log.debug("Procurando veículo existente para contrato:{}, placa:{}", dto.contrato(), dto.placa());
+        log.debug("Procurando veículo existente para contrato:{}, placa:{}, protocolo:{}",
+                dto.contrato(), dto.placa(), dto.protocolo());
 
-        List<VehicleCache> allVehicles = vehicleCacheRepository.findAll();
-
-        for (VehicleCache vehicle : allVehicles) {
+        if (dto.contrato() != null && !"N/A".equals(dto.contrato()) && !dto.contrato().trim().isEmpty()) {
             try {
-                if (dto.contrato() != null && !"N/A".equals(dto.contrato()) && !dto.contrato().trim().isEmpty()) {
-                    String contratoDecrypted = cryptoService.decryptContrato(vehicle.getContrato());
-                    if (dto.contrato().equals(contratoDecrypted)) {
-                        log.debug("Veículo encontrado por contrato: {} = {}", dto.contrato(), contratoDecrypted);
-                        return Optional.of(vehicle);
-                    }
-                }
-
-                if (dto.placa() != null && !"N/A".equals(dto.placa()) && !dto.placa().trim().isEmpty()) {
-                    String placaDecrypted = cryptoService.decryptPlaca(vehicle.getPlaca());
-                    if (dto.placa().equals(placaDecrypted)) {
-                        log.debug("Veículo encontrado por placa: {} = {}", dto.placa(), placaDecrypted);
-                        return Optional.of(vehicle);
-                    }
+                String contratoEncrypted = cryptoService.encryptContrato(dto.contrato());
+                Optional<VehicleCache> byContrato = vehicleCacheRepository.findByContrato(contratoEncrypted);
+                if (byContrato.isPresent()) {
+                    log.debug("Veículo encontrado por contrato criptografado");
+                    return byContrato;
                 }
             } catch (Exception e) {
-                log.trace("Erro ao descriptografar veículo ID {}: {}", vehicle.getId(), e.getMessage());
+                log.debug("Erro ao buscar por contrato: {}", e.getMessage());
             }
         }
 
-        log.debug("Nenhum veículo existente encontrado para contrato:{}, placa:{}",
-                dto.contrato(), dto.placa());
+        if (dto.placa() != null && !"N/A".equals(dto.placa()) && !dto.placa().trim().isEmpty()) {
+            try {
+                String placaEncrypted = cryptoService.encryptPlaca(dto.placa());
+                Optional<VehicleCache> byPlaca = vehicleCacheRepository.findByPlaca(placaEncrypted);
+                if (byPlaca.isPresent()) {
+                    log.debug("Veículo encontrado por placa criptografada");
+                    return byPlaca;
+                }
+            } catch (Exception e) {
+                log.debug("Erro ao buscar por placa: {}", e.getMessage());
+            }
+        }
+
+        if (dto.protocolo() != null && !"N/A".equals(dto.protocolo()) && !dto.protocolo().trim().isEmpty()) {
+            Optional<VehicleCache> byProtocolo = vehicleCacheRepository.findByProtocolo(dto.protocolo());
+            if (byProtocolo.isPresent()) {
+                log.debug("Veículo encontrado por protocolo");
+                return byProtocolo;
+            }
+        }
+
+        log.debug("Nenhum veículo existente encontrado");
         return Optional.empty();
     }
 
@@ -287,8 +316,6 @@ public class VehicleCacheService {
         LocalDateTime cutoffDate = LocalDateTime.now().minusDays(cacheRetentionDays);
         vehicleCacheRepository.deleteOldCacheEntries(cutoffDate);
         log.info("Cache limpo - removidas entradas antigas anteriores a {}", cutoffDate);
-
-        cleanDuplicates();
     }
 
     @Transactional
@@ -297,28 +324,48 @@ public class VehicleCacheService {
         try {
             long beforeCount = vehicleCacheRepository.count();
 
-            List<String> duplicateContracts = vehicleCacheRepository.findDuplicateContracts();
 
-            int deletedCount = 0;
-            for (String contract : duplicateContracts) {
-                List<VehicleCache> duplicates = vehicleCacheRepository.findByContratoOrderByIdDesc(contract);
-                if (duplicates.size() > 1) {
-                    List<VehicleCache> toDelete = duplicates.subList(1, duplicates.size());
-                    vehicleCacheRepository.deleteAll(toDelete);
-                    deletedCount += toDelete.size();
-                    log.debug("Removidas {} duplicatas para contrato: ***", toDelete.size());
+            List<VehicleCache> allVehicles = vehicleCacheRepository.findAll();
+            Map<String, List<VehicleCache>> groupedByContrato = new HashMap<>();
+            Map<String, List<VehicleCache>> groupedByPlaca = new HashMap<>();
+
+            for (VehicleCache vehicle : allVehicles) {
+                try {
+                    String contratoDescriptografado = cryptoService.decryptContrato(vehicle.getContrato());
+                    if (contratoDescriptografado != null && !"N/A".equals(contratoDescriptografado)
+                            && !contratoDescriptografado.trim().isEmpty()) {
+                        groupedByContrato.computeIfAbsent(contratoDescriptografado, k -> new ArrayList<>()).add(vehicle);
+                    }
+
+                    String placaDescriptografada = cryptoService.decryptPlaca(vehicle.getPlaca());
+                    if (placaDescriptografada != null && !"N/A".equals(placaDescriptografada)
+                            && !placaDescriptografada.trim().isEmpty()) {
+                        groupedByPlaca.computeIfAbsent(placaDescriptografada, k -> new ArrayList<>()).add(vehicle);
+                    }
+                } catch (Exception e) {
+                    log.trace("Erro ao descriptografar dados do veículo ID {}: {}", vehicle.getId(), e.getMessage());
                 }
             }
 
-            List<String> duplicatePlates = vehicleCacheRepository.findDuplicatePlates();
+            int deletedCount = 0;
 
-            for (String plate : duplicatePlates) {
-                List<VehicleCache> duplicates = vehicleCacheRepository.findByPlacaOrderByIdDesc(plate);
+            for (Map.Entry<String, List<VehicleCache>> entry : groupedByContrato.entrySet()) {
+                List<VehicleCache> duplicates = entry.getValue();
                 if (duplicates.size() > 1) {
-                    List<VehicleCache> toDelete = duplicates.subList(1, duplicates.size());
-                    vehicleCacheRepository.deleteAll(toDelete);
-                    deletedCount += toDelete.size();
-                    log.debug("Removidas {} duplicatas para placa: ***", toDelete.size());
+                    deletedCount += processDuplicates(duplicates, "contrato");
+                }
+            }
+
+            for (Map.Entry<String, List<VehicleCache>> entry : groupedByPlaca.entrySet()) {
+                List<VehicleCache> duplicates = entry.getValue();
+                if (duplicates.size() > 1) {
+                    List<VehicleCache> stillExisting = duplicates.stream()
+                            .filter(v -> vehicleCacheRepository.existsById(v.getId()))
+                            .collect(Collectors.toList());
+
+                    if (stillExisting.size() > 1) {
+                        deletedCount += processDuplicates(stillExisting, "placa");
+                    }
                 }
             }
 
@@ -328,6 +375,21 @@ public class VehicleCacheService {
         } catch (Exception e) {
             log.error("Erro durante limpeza de duplicatas", e);
         }
+    }
+
+    private int processDuplicates(List<VehicleCache> duplicates, String campo) {
+        duplicates.sort((a, b) -> {
+            if (a.getApiSyncDate() != null && b.getApiSyncDate() != null) {
+                return b.getApiSyncDate().compareTo(a.getApiSyncDate());
+            }
+            return b.getId().compareTo(a.getId());
+        });
+
+        List<VehicleCache> toDelete = duplicates.subList(1, duplicates.size());
+        vehicleCacheRepository.deleteAll(toDelete);
+        log.debug("Removidas {} duplicatas para {}: ***", toDelete.size(), campo);
+
+        return toDelete.size();
     }
 
     @Transactional
@@ -416,6 +478,4 @@ public class VehicleCacheService {
         private long minutesSinceLastSync;
         private String message;
     }
-
-
 }
