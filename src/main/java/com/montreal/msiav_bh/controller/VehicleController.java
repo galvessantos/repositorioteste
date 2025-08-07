@@ -186,5 +186,39 @@ public class VehicleController {
         }
     }
 
+    @GetMapping("/debug/crypto/{placa}")
+    @Operation(summary = "Debug de criptografia de placa (temporário)")
+    public ResponseEntity<Map<String, Object>> debugCrypto(@PathVariable String placa) {
+        try {
+            Map<String, Object> debug = new HashMap<>();
+            debug.put("placaOriginal", placa);
+            debug.put("placaNormalizada", placa.toUpperCase().trim());
+            
+            // Buscar informações do cache
+            var cacheStatus = vehicleCacheService.getCacheStatus();
+            debug.put("totalRegistrosCache", cacheStatus.getTotalRecords());
+            debug.put("cacheValido", cacheStatus.isValid());
+            
+            // Tentar buscar a placa (isso ativará os logs de debug)
+            PageDTO<VehicleDTO> resultado = vehicleApiService.getVehiclesWithFallback(
+                null, null, null, null, null, null, null, null, null,
+                placa, null, null, 0, 1, "id", "asc"
+            );
+            
+            debug.put("resultadoBusca", Map.of(
+                "encontrados", resultado.getTotalElements(),
+                "pagina", resultado.getPage()
+            ));
+            
+            return ResponseEntity.ok(debug);
+            
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                "erro", e.getMessage(),
+                "placa", placa
+            ));
+        }
+    }
+
 
 }

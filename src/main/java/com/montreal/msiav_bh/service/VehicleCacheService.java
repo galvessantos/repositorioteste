@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -80,6 +81,37 @@ public class VehicleCacheService {
         log.debug("Buscando com campos criptografados: contrato={}, placa={}",
                 contratoEncrypted != null ? "***ENCRYPTED***" : null,
                 placaEncrypted != null ? "***ENCRYPTED***" : null);
+
+        // DEBUG: Log específico para busca por placa
+        if (placa != null && !placa.trim().isEmpty()) {
+            log.info("🔍 DEBUG BUSCA POR PLACA:");
+            log.info("  - Placa original: '{}'", placa);
+            log.info("  - Placa normalizada: '{}'", placa.toUpperCase().trim());
+            log.info("  - Placa criptografada: '{}'", placaEncrypted != null ? placaEncrypted.substring(0, Math.min(20, placaEncrypted.length())) + "..." : "NULL");
+            log.info("  - Tamanho da placa criptografada: {}", placaEncrypted != null ? placaEncrypted.length() : 0);
+            
+            // Verificar se existem placas no cache que começam de forma similar
+            try {
+                long totalRecords = vehicleCacheRepository.count();
+                log.info("  - Total de registros no cache: {}", totalRecords);
+                
+                if (totalRecords > 0) {
+                    // Buscar algumas placas de exemplo para comparação
+                    Page<VehicleCache> sampleRecords = vehicleCacheRepository.findAll(PageRequest.of(0, 3));
+                    log.info("  - Amostras de placas no cache:");
+                    for (VehicleCache record : sampleRecords.getContent()) {
+                        String placaExemplo = record.getPlaca();
+                        if (placaExemplo != null) {
+                            log.info("    * Placa no banco: '{}' (tamanho: {})", 
+                                placaExemplo.substring(0, Math.min(20, placaExemplo.length())) + "...", 
+                                placaExemplo.length());
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Erro ao buscar registros de exemplo: {}", e.getMessage());
+            }
+        }
 
         Page<VehicleCache> cachedVehicles = vehicleCacheRepository.findWithFiltersFixed(
                 dataInicio, dataFim, credor, contratoEncrypted, protocolo, cpf,
