@@ -235,9 +235,24 @@ public class VehicleCacheService {
                         (e.getMessage().contains("constraint") ||
                                 e.getMessage().contains("duplicate") ||
                                 e.getMessage().contains("unique"))) {
-                    log.debug("Registro duplicado ignorado (constraint violation): protocolo={}, erro={}",
-                            dto.protocolo(), e.getMessage().substring(0, Math.min(100, e.getMessage().length())));
-                    duplicateSkipped++;
+                    // Attempt to upsert by protocolo if a constraint was hit
+                    try {
+                        if (dto.protocolo() != null && !dto.protocolo().trim().isEmpty() && !"N/A".equals(dto.protocolo())) {
+                            vehicleCacheRepository.findByProtocolo(dto.protocolo()).ifPresent(existingByProto -> {
+                                VehicleCache updatedEntity = updateExistingVehicle(existingByProto, dto, syncDate);
+                                vehicleCacheRepository.save(updatedEntity);
+                            });
+                            updated++;
+                            log.debug("Violação de constraint transformada em update por protocolo={}", dto.protocolo());
+                        } else {
+                            duplicateSkipped++;
+                            log.debug("Registro duplicado ignorado (constraint violation) sem protocolo: protocolo={}, erro={}",
+                                    dto.protocolo(), e.getMessage().substring(0, Math.min(100, e.getMessage().length())));
+                        }
+                    } catch (Exception inner) {
+                        duplicateSkipped++;
+                        log.debug("Falha no fallback de update por protocolo: protocolo={}, erro={}", dto.protocolo(), inner.getMessage());
+                    }
                 } else if (e.getMessage() != null &&
                         e.getMessage().contains("value too long for type character varying")) {
                     log.error("ERRO DE TAMANHO DE CAMPO: Algum campo excede o limite do banco de dados");
@@ -260,6 +275,16 @@ public class VehicleCacheService {
         log.debug("Procurando veículo existente para contrato:{}, placa:{}, protocolo:{}",
                 dto.contrato(), dto.placa(), dto.protocolo());
 
+        // 1) Tentar pelo protocolo (chave mais estável e não criptografada)
+        if (dto.protocolo() != null && !"N/A".equals(dto.protocolo()) && !dto.protocolo().trim().isEmpty()) {
+            Optional<VehicleCache> byProtocolo = vehicleCacheRepository.findByProtocolo(dto.protocolo());
+            if (byProtocolo.isPresent()) {
+                log.debug("Veículo encontrado por protocolo");
+                return byProtocolo;
+            }
+        }
+
+        // 2) Tentar por contrato criptografado
         if (dto.contrato() != null && !"N/A".equals(dto.contrato()) && !dto.contrato().trim().isEmpty()) {
             try {
                 String contratoEncrypted = cryptoService.encryptContrato(dto.contrato());
@@ -273,6 +298,7 @@ public class VehicleCacheService {
             }
         }
 
+        // 3) Tentar por placa criptografada
         if (dto.placa() != null && !"N/A".equals(dto.placa()) && !dto.placa().trim().isEmpty()) {
             try {
                 String placaEncrypted = cryptoService.encryptPlaca(dto.placa());
@@ -283,14 +309,6 @@ public class VehicleCacheService {
                 }
             } catch (Exception e) {
                 log.debug("Erro ao buscar por placa: {}", e.getMessage());
-            }
-        }
-
-        if (dto.protocolo() != null && !"N/A".equals(dto.protocolo()) && !dto.protocolo().trim().isEmpty()) {
-            Optional<VehicleCache> byProtocolo = vehicleCacheRepository.findByProtocolo(dto.protocolo());
-            if (byProtocolo.isPresent()) {
-                log.debug("Veículo encontrado por protocolo");
-                return byProtocolo;
             }
         }
 
