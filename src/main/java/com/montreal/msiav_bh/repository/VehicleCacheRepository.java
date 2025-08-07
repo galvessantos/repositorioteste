@@ -28,6 +28,11 @@ public interface VehicleCacheRepository extends JpaRepository<VehicleCache, Long
     // Busca por combinação contrato + placa (mais confiável para evitar duplicatas)
     Optional<VehicleCache> findByContratoAndPlaca(String contrato, String placa);
 
+    // Métodos para busca por descriptografia (contorna criptografia não-determinística)
+    List<VehicleCache> findByContratoIsNotNull();
+    
+    List<VehicleCache> findByPlacaIsNotNull();
+
     @Query("SELECT v FROM VehicleCache v WHERE v.apiSyncDate = (SELECT MAX(vc.apiSyncDate) FROM VehicleCache vc)")
     Page<VehicleCache> findLatestCachedVehicles(Pageable pageable);
 

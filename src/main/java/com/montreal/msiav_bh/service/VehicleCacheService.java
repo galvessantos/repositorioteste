@@ -282,63 +282,114 @@ public class VehicleCacheService {
         log.debug("Procurando veículo existente para contrato:{}, placa:{}, protocolo:{}",
                 dto.contrato(), dto.placa(), dto.protocolo());
 
-        // 1. PRIMEIRO: Busca pela combinação contrato + placa (chave primária de negócio)
-        if (dto.contrato() != null && !"N/A".equals(dto.contrato()) && !dto.contrato().trim().isEmpty() &&
-            dto.placa() != null && !"N/A".equals(dto.placa()) && !dto.placa().trim().isEmpty()) {
-            try {
-                String contratoEncrypted = cryptoService.encryptContrato(dto.contrato());
-                String placaEncrypted = cryptoService.encryptPlaca(dto.placa());
-                
-                // Busca por combinação contrato+placa (mais confiável)
-                Optional<VehicleCache> byCombo = vehicleCacheRepository.findByContratoAndPlaca(contratoEncrypted, placaEncrypted);
-                if (byCombo.isPresent()) {
-                    log.debug("Veículo encontrado por combinação contrato+placa");
-                    return byCombo;
-                }
-            } catch (Exception e) {
-                log.debug("Erro ao buscar por combinação contrato+placa: {}", e.getMessage());
-            }
-        }
-
-        // 2. SEGUNDO: Busca por protocolo (único por veículo)
+        // 1. PRIMEIRO: Busca por protocolo (mais rápido e único)
         if (dto.protocolo() != null && !"N/A".equals(dto.protocolo()) && !dto.protocolo().trim().isEmpty()) {
             Optional<VehicleCache> byProtocolo = vehicleCacheRepository.findByProtocolo(dto.protocolo());
             if (byProtocolo.isPresent()) {
-                log.debug("Veículo encontrado por protocolo");
+                log.debug("✅ Veículo encontrado por protocolo: {}", dto.protocolo());
                 return byProtocolo;
             }
         }
 
-        // 3. TERCEIRO: Busca por contrato apenas (fallback)
+        // 2. SEGUNDO: Como a criptografia pgcrypto é não-determinística, 
+        //    vamos buscar por contrato descriptografando todos os registros
         if (dto.contrato() != null && !"N/A".equals(dto.contrato()) && !dto.contrato().trim().isEmpty()) {
-            try {
-                String contratoEncrypted = cryptoService.encryptContrato(dto.contrato());
-                Optional<VehicleCache> byContrato = vehicleCacheRepository.findByContrato(contratoEncrypted);
-                if (byContrato.isPresent()) {
-                    log.debug("Veículo encontrado por contrato");
-                    return byContrato;
-                }
-            } catch (Exception e) {
-                log.debug("Erro ao buscar por contrato: {}", e.getMessage());
+            log.debug("🔍 Buscando por contrato descriptografado: {}", dto.contrato());
+            Optional<VehicleCache> byContrato = findByDecryptedContrato(dto.contrato());
+            if (byContrato.isPresent()) {
+                log.debug("✅ Veículo encontrado por contrato descriptografado");
+                return byContrato;
             }
         }
 
-        // 4. QUARTO: Busca por placa apenas (último fallback)
+        // 3. TERCEIRO: Busca por placa descriptografada (fallback)
         if (dto.placa() != null && !"N/A".equals(dto.placa()) && !dto.placa().trim().isEmpty()) {
-            try {
-                String placaEncrypted = cryptoService.encryptPlaca(dto.placa());
-                Optional<VehicleCache> byPlaca = vehicleCacheRepository.findByPlaca(placaEncrypted);
-                if (byPlaca.isPresent()) {
-                    log.debug("Veículo encontrado por placa");
-                    return byPlaca;
-                }
-            } catch (Exception e) {
-                log.debug("Erro ao buscar por placa: {}", e.getMessage());
+            log.debug("🔍 Buscando por placa descriptografada: {}", dto.placa());
+            Optional<VehicleCache> byPlaca = findByDecryptedPlaca(dto.placa());
+            if (byPlaca.isPresent()) {
+                log.debug("✅ Veículo encontrado por placa descriptografada");
+                return byPlaca;
             }
         }
 
-        log.debug("Nenhum veículo existente encontrado - será inserido como novo");
+        log.debug("❌ Nenhum veículo existente encontrado - será inserido como novo");
         return Optional.empty();
+    }
+
+    /**
+     * Busca veículo por contrato descriptografado (contorna o problema da criptografia não-determinística)
+     */
+    private Optional<VehicleCache> findByDecryptedContrato(String contratoPlainText) {
+        try {
+            // Busca todos os veículos que tenham contrato não-nulo
+            List<VehicleCache> allVehicles = vehicleCacheRepository.findByContratoIsNotNull();
+            
+            // Otimização: se há muitos registros, processa em lotes menores
+            int totalVehicles = allVehicles.size();
+            log.debug("🔍 Processando {} veículos para busca por contrato", totalVehicles);
+            
+            for (int i = 0; i < allVehicles.size(); i++) {
+                VehicleCache vehicle = allVehicles.get(i);
+                try {
+                    String decryptedContrato = cryptoService.decryptContrato(vehicle.getContrato());
+                    if (contratoPlainText.equals(decryptedContrato)) {
+                        log.debug("🎯 Match encontrado por contrato descriptografado no registro {}/{}", i+1, totalVehicles);
+                        return Optional.of(vehicle);
+                    }
+                } catch (Exception e) {
+                    log.trace("Erro ao descriptografar contrato do veículo ID {}: {}", vehicle.getId(), e.getMessage());
+                }
+                
+                // Log de progresso a cada 50 registros (só para debugging)
+                if ((i + 1) % 50 == 0) {
+                    log.trace("Progresso busca por contrato: {}/{} processados", i + 1, totalVehicles);
+                }
+            }
+            
+            log.debug("❌ Nenhum match encontrado por contrato após processar {} registros", totalVehicles);
+            return Optional.empty();
+        } catch (Exception e) {
+            log.error("Erro na busca por contrato descriptografado: {}", e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Busca veículo por placa descriptografada (contorna o problema da criptografia não-determinística)
+     */
+    private Optional<VehicleCache> findByDecryptedPlaca(String placaPlainText) {
+        try {
+            // Busca todos os veículos que tenham placa não-nula
+            List<VehicleCache> allVehicles = vehicleCacheRepository.findByPlacaIsNotNull();
+            
+            // Otimização: se há muitos registros, processa em lotes menores
+            int totalVehicles = allVehicles.size();
+            log.debug("🔍 Processando {} veículos para busca por placa", totalVehicles);
+            
+            for (int i = 0; i < allVehicles.size(); i++) {
+                VehicleCache vehicle = allVehicles.get(i);
+                try {
+                    String decryptedPlaca = cryptoService.decryptPlaca(vehicle.getPlaca());
+                    if (placaPlainText.equalsIgnoreCase(decryptedPlaca)) {
+                        log.debug("🎯 Match encontrado por placa descriptografada no registro {}/{}", i+1, totalVehicles);
+                        return Optional.of(vehicle);
+                    }
+                } catch (Exception e) {
+                    log.trace("Erro ao descriptografar placa do veículo ID {}: {}", vehicle.getId(), e.getMessage());
+                }
+                
+                // Log de progresso a cada 50 registros (só para debugging)
+                if ((i + 1) % 50 == 0) {
+                    log.trace("Progresso busca por placa: {}/{} processados", i + 1, totalVehicles);
+                }
+            }
+            
+            log.debug("❌ Nenhum match encontrado por placa após processar {} registros", totalVehicles);
+            return Optional.empty();
+        } catch (Exception e) {
+            log.error("Erro na busca por placa descriptografada: {}", e.getMessage());
+            return Optional.empty();
+        }
     }
 
     private VehicleCache updateExistingVehicle(VehicleCache existing, VehicleDTO dto, LocalDateTime syncDate) {
