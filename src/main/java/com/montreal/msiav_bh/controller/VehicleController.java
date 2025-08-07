@@ -3,7 +3,6 @@ package com.montreal.msiav_bh.controller;
 import com.montreal.msiav_bh.dto.PageDTO;
 import com.montreal.msiav_bh.dto.VehicleDTO;
 import com.montreal.msiav_bh.dto.response.QueryDetailResponseDTO;
-import com.montreal.msiav_bh.job.VehicleCacheUpdateJob;
 import com.montreal.msiav_bh.service.VehicleApiService;
 import com.montreal.msiav_bh.service.VehicleCacheService;
 import com.montreal.msiav_bh.utils.exceptions.ValidationMessages;
@@ -15,7 +14,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -37,14 +35,6 @@ public class VehicleController {
 
     private final VehicleApiService vehicleApiService;
     private final VehicleCacheService vehicleCacheService;
-
-    private final VehicleCacheUpdateJob vehicleCacheUpdateJob;
-
-    @Value("${vehicle.cache.update.enabled:true}")
-    private boolean cacheUpdateEnabled;
-
-    @Value("${vehicle.cache.update.interval:600000}")
-    private long cacheUpdateInterval;
 
     @GetMapping
     @Operation(summary = "Buscar veículos (Database-First)")
@@ -160,137 +150,37 @@ public class VehicleController {
         ));
     }
 
-    @PostMapping("/cache/refresh")
-    @Operation(summary = "Forçar atualização do cache via API")
-    public ResponseEntity<Map<String, String>> forceRefreshCache() {
-        try {
-            log.info("Solicitação manual de atualização do cache");
-            vehicleApiService.forceRefreshFromApi();
-            return ResponseEntity.ok(Map.of(
-                    "status", "success",
-                    "message", "Cache atualizado com sucesso via API",
-                    "source", "API → PostgreSQL"
-            ));
-        } catch (Exception e) {
-            log.error("Falha ao atualizar cache: {}", e.getMessage());
-            return ResponseEntity.internalServerError().body(Map.of(
+    @DeleteMapping("/cache/invalidate")
+    @Operation(summary = "Invalidar todo o cache (usar com cuidado)")
+    public ResponseEntity<Map<String, Object>> invalidateCache(
+            @RequestHeader(value = "X-Confirm-Action", required = false) String confirmAction) {
+
+        if (!"CONFIRM_INVALIDATE".equals(confirmAction)) {
+            return ResponseEntity.badRequest().body(Map.of(
                     "status", "error",
-                    "message", "Falha ao atualizar o cache",
-                    "error", e.getMessage()
+                    "message", "Ação não confirmada. Adicione o header 'X-Confirm-Action: CONFIRM_INVALIDATE'",
+                    "warning", "Esta operação remove TODOS os dados do cache"
             ));
         }
-    }
 
-    @GetMapping("/cache/status")
-    @Operation(summary = "Obter status detalhado do cache")
-    public ResponseEntity<Map<String, Object>> getCacheStatus() {
-        VehicleCacheService.CacheStatus status = vehicleCacheService.getCacheStatus();
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("valid", status.isValid());
-        response.put("totalRecords", status.getTotalRecords());
-        response.put("lastSyncDate", status.getLastSyncDate());
-        response.put("minutesSinceLastSync", status.getMinutesSinceLastSync());
-        response.put("message", status.getMessage());
-        response.put("strategy", "Database-First");
-        response.put("dataSource", status.isValid() ? "PostgreSQL (Updated)" : "PostgreSQL (Outdated)");
-
-        return ResponseEntity.ok(response);
-    }
-
-    @DeleteMapping("/cache/invalidate")
-    @Operation(summary = "Invalidar todo o cache")
-    public ResponseEntity<Map<String, String>> invalidateCache() {
         try {
-            log.info("Invalidando cache manualmente");
+            log.warn("INVALIDAÇÃO DE CACHE SOLICITADA - Removendo todos os dados do cache");
+            long recordsBeforeInvalidation = vehicleCacheService.getCacheStatus().getTotalRecords();
+
             vehicleCacheService.invalidateCache();
+
             return ResponseEntity.ok(Map.of(
                     "status", "success",
-                    "message", "Cache invalidado. Próxima consulta forçará atualização via API",
-                    "action", "Cache cleared"
+                    "message", "Cache invalidado com sucesso",
+                    "recordsRemoved", recordsBeforeInvalidation,
+                    "warning", "Próxima consulta forçará atualização via API"
             ));
         } catch (Exception e) {
+            log.error("Falha ao invalidar cache", e);
             return ResponseEntity.internalServerError().body(Map.of(
                     "status", "error",
                     "message", "Falha ao invalidar o cache",
                     "error", e.getMessage()
-            ));
-        }
-    }
-
-    @PostMapping("/cache/clean-duplicates")
-    @Operation(summary = "Limpar registros duplicados do cache")
-    public ResponseEntity<Map<String, Object>> cleanDuplicates() {
-        try {
-            log.info("Iniciando limpeza manual de duplicatas");
-            VehicleCacheService.CacheStatus beforeStatus = vehicleCacheService.getCacheStatus();
-            vehicleCacheService.cleanDuplicates();
-            VehicleCacheService.CacheStatus afterStatus = vehicleCacheService.getCacheStatus();
-
-            return ResponseEntity.ok(Map.of(
-                    "status", "success",
-                    "message", "Limpeza de duplicatas concluída",
-                    "before", Map.of("totalRecords", beforeStatus.getTotalRecords()),
-                    "after", Map.of("totalRecords", afterStatus.getTotalRecords()),
-                    "removed", beforeStatus.getTotalRecords() - afterStatus.getTotalRecords()
-            ));
-        } catch (Exception e) {
-            log.error("Falha na limpeza de duplicatas: {}", e.getMessage());
-            return ResponseEntity.internalServerError().body(Map.of(
-                    "status", "error",
-                    "message", "Falha na limpeza de duplicatas",
-                    "error", e.getMessage()
-            ));
-        }
-    }
-
-    @GetMapping("/cache/debug/{contrato}")
-    @Operation(summary = "Debug de duplicatas para contrato específico")
-    public ResponseEntity<Map<String, Object>> debugContract(@PathVariable String contrato) {
-        try {
-            log.info("Debug do contrato: {}", contrato);
-            Map<String, Object> debugInfo = vehicleCacheService.debugContract(contrato);
-            return ResponseEntity.ok(debugInfo);
-        } catch (Exception e) {
-            log.error("Erro no debug do contrato: {}", e.getMessage());
-            return ResponseEntity.internalServerError().body(Map.of(
-                    "status", "error",
-                    "message", "Erro no debug",
-                    "error", e.getMessage()
-            ));
-        }
-    }
-
-    @GetMapping("/job/status")
-    @Operation(summary = "Verificar status do job de atualização")
-    public ResponseEntity<Map<String, Object>> getJobStatus() {
-        Map<String, Object> status = new HashMap<>();
-
-        status.put("jobEnabled", cacheUpdateEnabled);
-        status.put("updateInterval", "${vehicle.cache.update.interval:600000}");
-
-        VehicleCacheService.CacheStatus cacheStatus = vehicleCacheService.getCacheStatus();
-        status.put("lastSync", cacheStatus.getLastSyncDate());
-        status.put("minutesSinceLastSync", cacheStatus.getMinutesSinceLastSync());
-        status.put("totalRecords", cacheStatus.getTotalRecords());
-
-        return ResponseEntity.ok(status);
-    }
-
-    @PostMapping("/job/trigger")
-    @Operation(summary = "Disparar job manualmente")
-    public ResponseEntity<Map<String, String>> triggerJob() {
-        try {
-            log.info("Disparando job manualmente via endpoint");
-            vehicleCacheUpdateJob.updateVehicleCache();
-            return ResponseEntity.ok(Map.of(
-                    "status", "success",
-                    "message", "Job disparado com sucesso"
-            ));
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Map.of(
-                    "status", "error",
-                    "message", e.getMessage()
             ));
         }
     }

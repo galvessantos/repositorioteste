@@ -238,6 +238,13 @@ public class VehicleCacheService {
                     log.debug("Registro duplicado ignorado (constraint violation): protocolo={}, erro={}",
                             dto.protocolo(), e.getMessage().substring(0, Math.min(100, e.getMessage().length())));
                     duplicateSkipped++;
+                } else if (e.getMessage() != null &&
+                        e.getMessage().contains("value too long for type character varying")) {
+                    log.error("ERRO DE TAMANHO DE CAMPO: Algum campo excede o limite do banco de dados");
+                    log.error("Protocolo afetado: {}", dto.protocolo());
+                    log.error("Este erro indica que os campos criptografados são muito longos");
+                    log.error("SOLUÇÃO: Execute a migração do banco: ALTER TABLE vehicle_cache ALTER COLUMN contrato TYPE TEXT, ALTER TABLE vehicle_cache ALTER COLUMN placa TYPE TEXT;");
+                    throw new RuntimeException("Campo muito longo - necessária migração do banco de dados", e);
                 } else {
                     log.error("Erro inesperado ao processar veículo protocolo={}: {}", dto.protocolo(), e.getMessage());
                     throw e;
@@ -396,6 +403,7 @@ public class VehicleCacheService {
     public void invalidateCache() {
         log.info("Invalidando todo o cache de veículos");
         vehicleCacheRepository.deleteAll();
+        log.info("Cache invalidado com sucesso - {} registros removidos", vehicleCacheRepository.count());
     }
 
     public CacheStatus getCacheStatus() {
@@ -423,50 +431,6 @@ public class VehicleCacheService {
                 .message(isValid ? "Cache válido (dados sensíveis protegidos)" :
                         String.format("Cache desatualizado (última sync há %d minutos)", minutesSinceSync))
                 .build();
-    }
-
-    public Map<String, Object> debugContract(String contrato) {
-        Map<String, Object> debugInfo = new HashMap<>();
-
-        try {
-            String contratoEncrypted = cryptoService.encryptContrato(contrato);
-
-            List<VehicleCache> duplicates = vehicleCacheRepository.findByContratoOrderByIdDesc(contratoEncrypted);
-
-            debugInfo.put("contrato_original", contrato);
-            debugInfo.put("contrato_criptografado", contratoEncrypted);
-            debugInfo.put("total_encontrados", duplicates.size());
-
-            List<Map<String, Object>> registros = new ArrayList<>();
-            for (VehicleCache entity : duplicates) {
-                Map<String, Object> registro = new HashMap<>();
-                registro.put("id", entity.getId());
-                registro.put("external_id", entity.getExternalId());
-                registro.put("contrato_criptografado", entity.getContrato());
-                registro.put("placa_criptografada", entity.getPlaca());
-                registro.put("credor", entity.getCredor());
-                registro.put("api_sync_date", entity.getApiSyncDate());
-                registro.put("created_at", entity.getCreatedAt());
-
-                try {
-                    String contratoDesc = cryptoService.decryptContrato(entity.getContrato());
-                    String placaDesc = cryptoService.decryptPlaca(entity.getPlaca());
-                    registro.put("contrato_descriptografado", contratoDesc);
-                    registro.put("placa_descriptografada", placaDesc);
-                } catch (Exception e) {
-                    registro.put("erro_descriptografia", e.getMessage());
-                }
-
-                registros.add(registro);
-            }
-
-            debugInfo.put("registros", registros);
-
-        } catch (Exception e) {
-            debugInfo.put("erro", e.getMessage());
-        }
-
-        return debugInfo;
     }
 
     @lombok.Data

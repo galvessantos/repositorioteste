@@ -11,6 +11,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import java.time.temporal.ChronoUnit;
+
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -35,6 +37,12 @@ public class VehicleCacheUpdateJob {
     @Value("${vehicle.cache.update.days-to-fetch:30}")
     private int daysToFetch;
 
+    @Value("${vehicle.cache.update.fallback-days:60}")
+    private int fallbackDaysToFetch;
+
+    @Value("${vehicle.cache.update.max-historical-days:180}")
+    private int maxHistoricalDays;
+
     @Scheduled(fixedDelayString = "${vehicle.cache.update.interval:600000}")
     public void updateVehicleCache() {
         if (!jobLock.tryLock()) {
@@ -53,21 +61,26 @@ public class VehicleCacheUpdateJob {
             log.info("Horário: {}", startTime.format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")));
 
             try {
-                LocalDate endDate = LocalDate.now();
-                LocalDate startDate = endDate.minusDays(daysToFetch);
-
-                log.info("Período de busca: {} a {}", startDate, endDate);
-                log.info("Consultando API externa...");
-
                 List<ConsultaNotificationResponseDTO.NotificationData> notifications =
-                        apiQueryService.searchByPeriod(startDate, endDate);
+                        tryFetchWithDateRange(daysToFetch, "período principal");
 
-                if (notifications != null && !notifications.isEmpty()) {
+                if ((notifications == null || notifications.isEmpty()) && fallbackDaysToFetch > daysToFetch) {
+                    log.info("Tentando período de fallback de {} dias", fallbackDaysToFetch);
+                    notifications = tryFetchWithDateRange(fallbackDaysToFetch, "período de fallback");
+                }
+
+                if (notifications == null || notifications.isEmpty()) {
+                    notifications = tryHistoricalPeriods();
+                }
+
+                if (!notifications.isEmpty()) {
                     log.info("API retornou {} notificações", notifications.size());
 
                     List<VehicleDTO> vehicles = vehicleInquiryMapper.mapToVeiculoDTO(notifications);
                     log.info("Convertidos para {} veículos únicos", vehicles.size());
 
+                    LocalDate endDate = LocalDate.now();
+                    LocalDate startDate = endDate.minusDays(daysToFetch);
                     CacheUpdateContext context = CacheUpdateContext.scheduledRefresh(startDate, endDate);
 
                     vehicleCacheService.updateCacheThreadSafe(vehicles, context);
@@ -77,7 +90,8 @@ public class VehicleCacheUpdateJob {
                     log.info("Tempo de execução: {} segundos", duration);
                     log.info("Total de veículos atualizados: {}", vehicles.size());
                 } else {
-                    log.warn("API retornou lista vazia - nenhuma atualização realizada");
+                    log.warn("==== NENHUM DADO ENCONTRADO EM TODOS OS PERÍODOS TENTADOS ====");
+                    log.warn("Verifique se há dados disponíveis na API externa ou se as datas estão corretas");
                 }
 
             } catch (Exception e) {
@@ -94,6 +108,55 @@ public class VehicleCacheUpdateJob {
         } finally {
             jobLock.unlock();
         }
+    }
+
+    private List<ConsultaNotificationResponseDTO.NotificationData> tryFetchWithDateRange(int days, String periodName) {
+        try {
+            LocalDate endDate = LocalDate.now();
+            LocalDate startDate = endDate.minusDays(days);
+
+            log.info("Tentando {} - Período de busca: {} a {}", periodName, startDate, endDate);
+            log.info("Consultando API externa...");
+
+            return apiQueryService.searchByPeriod(startDate, endDate);
+        } catch (Exception e) {
+            log.warn("Erro ao buscar dados para {}: {}", periodName, e.getMessage());
+            return List.of();
+        }
+    }
+
+    private List<ConsultaNotificationResponseDTO.NotificationData> tryHistoricalPeriods() {
+        log.info("Tentando períodos históricos...");
+
+        LocalDate currentDate = LocalDate.now();
+
+        for (int monthsBack = 1; monthsBack <= 6; monthsBack++) {
+            try {
+                LocalDate endDate = currentDate.minusMonths(monthsBack);
+                LocalDate startDate = endDate.minusDays(30);
+
+                if (ChronoUnit.DAYS.between(startDate, currentDate) > maxHistoricalDays)
+                {
+                    break;
+                }
+
+                log.info("Tentando período histórico: {} a {} ({} meses atrás)",
+                        startDate, endDate, monthsBack);
+
+                List<ConsultaNotificationResponseDTO.NotificationData> notifications =
+                        apiQueryService.searchByPeriod(startDate, endDate);
+
+                if (notifications != null && !notifications.isEmpty()) {
+                    log.info("Encontrados dados no período histórico de {} meses atrás", monthsBack);
+                    return notifications;
+                }
+            } catch (Exception e) {
+                log.debug("Erro ao buscar período histórico de {} meses: {}", monthsBack, e.getMessage());
+            }
+        }
+
+        log.warn("Nenhum dado encontrado em períodos históricos");
+        return List.of();
     }
 
     @Scheduled(cron = "${vehicle.cache.cleanup.cron:0 0 2 * * ?}")
