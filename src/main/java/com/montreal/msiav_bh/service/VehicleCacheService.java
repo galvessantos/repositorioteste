@@ -392,12 +392,6 @@ public class VehicleCacheService {
         return toDelete.size();
     }
 
-    @Transactional
-    public void invalidateCache() {
-        log.info("Invalidando todo o cache de veículos");
-        vehicleCacheRepository.deleteAll();
-    }
-
     public CacheStatus getCacheStatus() {
         Optional<LocalDateTime> lastSyncOpt = vehicleCacheRepository.findLastSyncDate();
         long totalRecords = vehicleCacheRepository.count();
@@ -423,50 +417,6 @@ public class VehicleCacheService {
                 .message(isValid ? "Cache válido (dados sensíveis protegidos)" :
                         String.format("Cache desatualizado (última sync há %d minutos)", minutesSinceSync))
                 .build();
-    }
-
-    public Map<String, Object> debugContract(String contrato) {
-        Map<String, Object> debugInfo = new HashMap<>();
-
-        try {
-            String contratoEncrypted = cryptoService.encryptContrato(contrato);
-
-            List<VehicleCache> duplicates = vehicleCacheRepository.findByContratoOrderByIdDesc(contratoEncrypted);
-
-            debugInfo.put("contrato_original", contrato);
-            debugInfo.put("contrato_criptografado", contratoEncrypted);
-            debugInfo.put("total_encontrados", duplicates.size());
-
-            List<Map<String, Object>> registros = new ArrayList<>();
-            for (VehicleCache entity : duplicates) {
-                Map<String, Object> registro = new HashMap<>();
-                registro.put("id", entity.getId());
-                registro.put("external_id", entity.getExternalId());
-                registro.put("contrato_criptografado", entity.getContrato());
-                registro.put("placa_criptografada", entity.getPlaca());
-                registro.put("credor", entity.getCredor());
-                registro.put("api_sync_date", entity.getApiSyncDate());
-                registro.put("created_at", entity.getCreatedAt());
-
-                try {
-                    String contratoDesc = cryptoService.decryptContrato(entity.getContrato());
-                    String placaDesc = cryptoService.decryptPlaca(entity.getPlaca());
-                    registro.put("contrato_descriptografado", contratoDesc);
-                    registro.put("placa_descriptografada", placaDesc);
-                } catch (Exception e) {
-                    registro.put("erro_descriptografia", e.getMessage());
-                }
-
-                registros.add(registro);
-            }
-
-            debugInfo.put("registros", registros);
-
-        } catch (Exception e) {
-            debugInfo.put("erro", e.getMessage());
-        }
-
-        return debugInfo;
     }
 
     @lombok.Data

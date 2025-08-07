@@ -161,55 +161,6 @@ public class VehicleCacheUpdateJob {
         return List.of();
     }
 
-    /**
-     * Método para diagnóstico manual - pode ser chamado via endpoint de admin
-     * para testar diferentes períodos e verificar a conectividade da API
-     */
-    public void runDiagnosticCheck() {
-        log.info("==== INICIANDO VERIFICAÇÃO DIAGNÓSTICA ====");
-        
-        try {
-            // Test current period
-            LocalDate endDate = LocalDate.now();
-            LocalDate startDate = endDate.minusDays(daysToFetch);
-            log.info("Testando período atual: {} a {}", startDate, endDate);
-            
-            List<ConsultaNotificationResponseDTO.NotificationData> currentResults = 
-                apiQueryService.searchByPeriod(startDate, endDate);
-            log.info("Período atual retornou {} registros", 
-                    currentResults != null ? currentResults.size() : 0);
-            
-            // Test historical periods
-            for (int monthsBack = 1; monthsBack <= 3; monthsBack++) {
-                LocalDate histEndDate = endDate.minusMonths(monthsBack);
-                LocalDate histStartDate = histEndDate.minusDays(30);
-                
-                log.info("Testando período histórico {}: {} a {}", monthsBack, histStartDate, histEndDate);
-                
-                List<ConsultaNotificationResponseDTO.NotificationData> histResults = 
-                    apiQueryService.searchByPeriod(histStartDate, histEndDate);
-                log.info("Período histórico {} retornou {} registros", 
-                        monthsBack, histResults != null ? histResults.size() : 0);
-                
-                if (histResults != null && !histResults.isEmpty()) {
-                    log.info("✓ Dados encontrados no período histórico de {} meses atrás", monthsBack);
-                    // Show sample of the first result
-                    if (!histResults.isEmpty()) {
-                        var sample = histResults.get(0);
-                        log.info("Exemplo de registro: Contrato={}, Data={}", 
-                                sample.nu_contrato(), sample.dt_pedido());
-                    }
-                    break;
-                }
-            }
-            
-        } catch (Exception e) {
-            log.error("Erro durante verificação diagnóstica", e);
-        }
-        
-        log.info("==== VERIFICAÇÃO DIAGNÓSTICA CONCLUÍDA ====");
-    }
-
     @Scheduled(cron = "${vehicle.cache.cleanup.cron:0 0 2 * * ?}")
     public void cleanupOldCache() {
         if (!jobLock.tryLock()) {

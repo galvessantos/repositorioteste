@@ -23,63 +23,52 @@ Período principal (30 dias) → Período de fallback (60 dias) → Períodos hi
 ```
 
 ### 2. Novas Configurações
-Adicione no `application.properties`:
+Configurações disponíveis no `application.properties`:
 
 ```properties
-# Período de fallback quando o principal falha
+# Período principal de busca (padrão: 30 dias)
+vehicle.cache.update.days-to-fetch=30
+
+# Período de fallback quando o principal falha (padrão: 60 dias)
 vehicle.cache.update.fallback-days=60
 
-# Limite máximo para busca histórica
+# Limite máximo para busca histórica (padrão: 180 dias)
 vehicle.cache.update.max-historical-days=180
+
+# Intervalo entre execuções do job (padrão: 10 minutos)
+vehicle.cache.update.interval=600000
 ```
 
-### 3. Endpoint de Diagnóstico
-Use o endpoint para testar manualmente:
-
-```bash
-POST /api/v1/vehicle/admin/diagnostic
-```
-
-## Como Usar o Diagnóstico
-
-### Via API
-```bash
-curl -X POST http://localhost:8080/api/v1/vehicle/admin/diagnostic \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN"
-```
-
-### Resposta Esperada
-```json
-{
-  "status": "success",
-  "message": "Verificação diagnóstica executada. Verifique os logs para detalhes.",
-  "timestamp": "2025-08-07T19:30:00"
-}
-```
-
-### Logs de Diagnóstico
-O diagnóstico testará:
-1. Período atual (30 dias)
-2. Períodos históricos (1-3 meses atrás)
-3. Mostrará amostras de dados encontrados
+### 3. Logs Melhorados
+O sistema agora fornece logs mais detalhados sobre:
+- Qual período está sendo testado
+- Quantos registros foram encontrados em cada tentativa
+- Qual período foi efetivamente usado para atualizar o cache
 
 ## Interpretando os Logs
 
-### ✅ Sucesso
+### ✅ Funcionamento Normal
 ```
+INFO c.m.m.job.VehicleCacheUpdateJob - ==== INICIANDO JOB DE ATUALIZAÇÃO DO CACHE ====
+INFO c.m.m.job.VehicleCacheUpdateJob - Tentando período principal - Período de busca: 2025-07-08 a 2025-08-07
+INFO c.m.m.service.ApiQueryService - Período não encontrado na API: 2025-07-08 a 2025-08-07
+INFO c.m.m.job.VehicleCacheUpdateJob - Tentando período de fallback de 60 dias
+INFO c.m.m.job.VehicleCacheUpdateJob - Tentando períodos históricos...
 INFO c.m.m.job.VehicleCacheUpdateJob - ✓ Dados encontrados no período histórico de 2 meses atrás
-INFO c.m.m.job.VehicleCacheUpdateJob - Exemplo de registro: Contrato=PA250625, Data=2025-06-24
+INFO c.m.m.job.VehicleCacheUpdateJob - API retornou 11 notificações
+INFO c.m.m.job.VehicleCacheUpdateJob - ==== JOB CONCLUÍDO COM SUCESSO ====
 ```
 
-### ⚠️ Aviso (Normal)
+### ⚠️ Aviso (Pode ser Normal)
 ```
 INFO c.m.m.service.ApiQueryService - Período não encontrado na API: 2025-07-08 a 2025-08-07
+WARN c.m.m.job.VehicleCacheUpdateJob - ==== NENHUM DADO ENCONTRADO EM TODOS OS PERÍODOS TENTADOS ====
 ```
 
-### ❌ Erro
+### ❌ Erro que Requer Atenção
 ```
 ERROR c.m.m.service.ApiQueryService - Erro na requisição: 401 - Token de autenticação inválido
+ERROR c.m.m.job.VehicleCacheUpdateJob - ==== FALHA NO JOB DE ATUALIZAÇÃO ====
 ```
 
 ## Configurações Recomendadas
@@ -102,36 +91,62 @@ vehicle.cache.update.interval=300000  # 5 minutos
 
 ## Monitoramento
 
-### Logs Importantes
+### Logs Importantes a Observar
 - `==== INICIANDO JOB DE ATUALIZAÇÃO DO CACHE ====`
 - `Tentando período principal`
 - `Tentando período de fallback`
 - `Tentando períodos históricos`
 - `==== JOB CONCLUÍDO COM SUCESSO ====`
+- `==== NENHUM DADO ENCONTRADO EM TODOS OS PERÍODOS TENTADOS ====`
 
-### Métricas a Observar
-- Frequência de uso do fallback
+### Métricas a Acompanhar
+- Frequência de uso do período de fallback
 - Períodos históricos mais bem-sucedidos
 - Tempo de execução do job
+- Quantidade de registros atualizados
 
 ## Resolução de Problemas Específicos
 
-### 1. Sempre usa período histórico
+### 1. Sistema sempre usa períodos históricos
 **Causa**: API não tem dados recentes
-**Solução**: Verificar com fornecedor da API sobre disponibilidade de dados
+**Solução**: 
+- Verificar com fornecedor da API sobre disponibilidade de dados atuais
+- Ajustar `days-to-fetch` para um período menor se necessário
 
 ### 2. Nenhum período retorna dados
 **Causa**: Problema de conectividade ou credenciais
 **Solução**: 
 1. Verificar configurações de API (`montreal.api.*`)
-2. Testar endpoint de diagnóstico
-3. Verificar logs de autenticação
+2. Verificar logs de autenticação
+3. Testar conectividade de rede
 
 ### 3. Performance degradada
 **Causa**: Muitas tentativas de períodos
 **Solução**: Ajustar configurações:
 - Reduzir `max-historical-days`
-- Aumentar `cache.update.interval`
+- Aumentar `interval` entre execuções
+
+### 4. Cache nunca atualiza
+**Causa**: Job pode estar desabilitado
+**Solução**:
+- Verificar `vehicle.cache.update.enabled=true`
+- Verificar se há erros de criptografia nos logs
+
+## Endpoints Disponíveis
+
+### Busca de Veículos
+```
+GET /api/v1/vehicle
+```
+Este endpoint retorna informações sobre o status do cache nos headers HTTP:
+- `X-Cache-Status`: Valid/Outdated
+- `X-Cache-Age-Minutes`: Idade do cache em minutos
+
+### Health Check
+```
+GET /api/v1/vehicle/health
+```
+Verificação básica da saúde da API.
 
 ## Contato
 Para problemas persistentes, verificar logs completos e contatar a equipe de desenvolvimento.
