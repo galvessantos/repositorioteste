@@ -61,7 +61,7 @@ public class VehicleCacheService {
         return isValid;
     }
 
-    public Page<VehicleDTO> getFromCache(LocalDate dataInicio, LocalDate dataFim,
+    public PageDTO<VehicleDTO> getFromCache(LocalDate dataInicio, LocalDate dataFim,
                                          String credor, String contrato,
                                          String protocolo, String cpf,
                                          String uf, String cidade,
@@ -121,7 +121,29 @@ public class VehicleCacheService {
         log.info("Dados recuperados do PostgreSQL: {} registros de {} total",
                 cachedVehicles.getContent().size(), cachedVehicles.getTotalElements());
 
-        return cachedVehicles.map(this::decryptAndMapToDTO);
+        // Se busca por placa não retornou resultados, tentar busca alternativa
+        if (placa != null && !placa.trim().isEmpty() && cachedVehicles.getTotalElements() == 0) {
+            log.warn("Busca normal por placa '{}' não retornou resultados. Tentando busca alternativa...", placa);
+            return searchByPlacaAlternative(placa, pageable);
+        }
+
+        List<VehicleDTO> vehiclesCacheDecrypted = cachedVehicles.getContent().stream()
+                .map(vehicleCacheMapper::toDto)
+                .collect(Collectors.toList());
+
+        log.info("Dados descriptografados: {} veículos prontos para retorno",
+                vehiclesCacheDecrypted.size());
+
+        return PageDTO.<VehicleDTO>builder()
+                .content(vehiclesCacheDecrypted)
+                .page(cachedVehicles.getNumber())
+                .size(cachedVehicles.getSize())
+                .totalElements(cachedVehicles.getTotalElements())
+                .totalPages(cachedVehicles.getTotalPages())
+                .first(cachedVehicles.isFirst())
+                .last(cachedVehicles.isLast())
+                .empty(cachedVehicles.isEmpty())
+                .build();
     }
 
     private VehicleDTO decryptAndMapToDTO(VehicleCache entity) {
@@ -154,7 +176,83 @@ public class VehicleCacheService {
         }
     }
 
-    @Transactional
+    /**
+     * Método alternativo para busca por placa que testa várias variações
+     * Usado quando a busca normal falha
+     */
+    public PageDTO<VehicleDTO> searchByPlacaAlternative(String placa, Pageable pageable) {
+        if (placa == null || placa.trim().isEmpty()) {
+            return PageDTO.<VehicleDTO>builder()
+                    .content(List.of())
+                    .page(0)
+                    .size(0)
+                    .totalElements(0L)
+                    .totalPages(0)
+                    .first(true)
+                    .last(true)
+                    .empty(true)
+                    .build();
+        }
+
+        log.info("🔍 BUSCA ALTERNATIVA POR PLACA: '{}'", placa);
+        
+        // Buscar todos os veículos e filtrar em memória (menos eficiente, mas mais confiável)
+        Page<VehicleCache> allCachedVehicles = vehicleCacheRepository.findAll(pageable);
+        
+        log.info("Total de veículos no cache para filtrar: {}", allCachedVehicles.getTotalElements());
+        
+        List<VehicleCache> matchingVehicles = new ArrayList<>();
+        String placaNormalizada = placa.toUpperCase().trim();
+        
+        // Variações possíveis da placa para teste
+        List<String> placaVariacoes = List.of(
+            placaNormalizada,
+            placaNormalizada.replace("O", "0"), // O -> 0
+            placaNormalizada.replace("0", "O"), // 0 -> O
+            placaNormalizada.replace("I", "1"), // I -> 1
+            placaNormalizada.replace("1", "I")  // 1 -> I
+        );
+        
+        for (VehicleCache vehicle : allCachedVehicles.getContent()) {
+            try {
+                String placaDescriptografada = cryptoService.decryptPlaca(vehicle.getPlaca());
+                if (placaDescriptografada != null && !"N/A".equals(placaDescriptografada)) {
+                    String placaDescNormalizada = placaDescriptografada.toUpperCase().trim();
+                    
+                    // Testar todas as variações
+                    for (String variacao : placaVariacoes) {
+                        if (variacao.equals(placaDescNormalizada)) {
+                            log.info("✅ MATCH ENCONTRADO: '{}' == '{}' (variação: '{}')", 
+                                    placa, placaDescriptografada, variacao);
+                            matchingVehicles.add(vehicle);
+                            break; // Sair do loop de variações
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Erro ao descriptografar placa do veículo ID {}: {}", vehicle.getId(), e.getMessage());
+            }
+        }
+        
+        log.info("Busca alternativa encontrou {} veículos", matchingVehicles.size());
+        
+        // Converter para DTO
+        List<VehicleDTO> vehiclesDto = matchingVehicles.stream()
+                .map(vehicleCacheMapper::toDto)
+                .collect(Collectors.toList());
+        
+        return PageDTO.<VehicleDTO>builder()
+                .content(vehiclesDto)
+                .page(pageable.getPageNumber())
+                .size(pageable.getPageSize())
+                .totalElements((long) vehiclesDto.size())
+                .totalPages(vehiclesDto.isEmpty() ? 0 : 1)
+                .first(true)
+                .last(true)
+                .empty(vehiclesDto.isEmpty())
+                .build();
+    }
+
     public void updateCacheThreadSafe(List<VehicleDTO> vehicles, CacheUpdateContext context) {
         cacheLock.lock();
         try {

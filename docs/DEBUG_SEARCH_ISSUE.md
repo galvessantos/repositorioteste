@@ -56,6 +56,19 @@ Após executar a busca com placa, procure nos logs por:
 
 ## 🔧 Soluções
 
+### ✅ Solução Implementada: Busca Alternativa Automática
+
+O sistema agora detecta automaticamente quando a busca normal por placa falha e executa uma **busca alternativa** que:
+
+1. **Descriptografa todas as placas** do cache
+2. **Testa variações comuns** da placa buscada:
+   - `PSS0O37` (original)
+   - `PSS0037` (O → 0)
+   - `PSS0O37` (0 → O) 
+   - `PSS1I37` (I → 1)
+   - `PSS1I37` (1 → I)
+3. **Retorna resultados** mesmo com problemas de normalização
+
 ### Solução 1: Verificar Dados Reais no Banco
 ```sql
 -- Conectar no PostgreSQL e verificar:
@@ -80,38 +93,43 @@ WHERE LENGTH(placa) > 50
 LIMIT 3;
 ```
 
-### Solução 3: Busca Alternativa (Temporária)
-Se o problema persistir, podemos implementar uma busca que descriptografa todos os registros e compara:
-
-```java
-// Implementação alternativa que descriptografa tudo (menos eficiente)
-List<VehicleCache> allRecords = vehicleCacheRepository.findAll();
-return allRecords.stream()
-    .filter(record -> {
-        String placaDescriptografada = cryptoService.decryptPlaca(record.getPlaca());
-        return placa.equalsIgnoreCase(placaDescriptografada);
-    })
-    .collect(Collectors.toList());
-```
-
 ## 📝 Comandos de Teste
 
-### 1. Busca Normal (Problema)
+### 1. ✅ Busca Normal (Agora com Fallback Automático)
 ```bash
 curl "{{base_url}}/api/v1/vehicle?placa=PSS0O37"
 ```
+**Resultado esperado**: Deve encontrar o veículo automaticamente usando busca alternativa se a normal falhar.
 
-### 2. Debug de Criptografia
+### 2. 🆕 Teste Específico de Busca Alternativa
+```bash
+curl "{{base_url}}/api/v1/vehicle/debug/busca-alternativa?placa=PSS0O37"
+```
+**Este endpoint**:
+- Executa busca normal E busca alternativa
+- Compara os resultados
+- Mostra detalhes dos veículos encontrados
+
+### 3. 🆕 Debug de Descriptografia
+```bash
+curl "{{base_url}}/api/v1/vehicle/debug/decrypt-placas"
+```
+**Mostra**:
+- Todas as placas descriptografadas do cache
+- Total de veículos
+- Permite verificar se `PSS0O37` existe
+
+### 4. Debug de Criptografia Individual
 ```bash
 curl "{{base_url}}/api/v1/vehicle/debug/crypto/PSS0O37"
 ```
 
-### 3. Verificar Cache Geral
+### 5. Verificar Cache Geral
 ```bash
 curl "{{base_url}}/api/v1/vehicle" | jq '.metadata'
 ```
 
-### 4. Buscar por Outros Campos (Teste)
+### 6. Buscar por Outros Campos (Controle)
 ```bash
 # Testar busca por credor (não criptografado)
 curl "{{base_url}}/api/v1/vehicle?credor=Financeira"
@@ -120,16 +138,36 @@ curl "{{base_url}}/api/v1/vehicle?credor=Financeira"
 curl "{{base_url}}/api/v1/vehicle?modelo=Civic"
 ```
 
-## 🎯 Próximos Passos
+## 🎯 Como Testar a Solução
 
-1. **Execute o endpoint de debug** e analise os logs
-2. **Verifique se outras buscas funcionam** (credor, modelo)
-3. **Compare as placas** no banco vs. a placa buscada
-4. **Se necessário**, implemente busca alternativa temporária
+### Passo 1: Teste a Busca Normal
+```bash
+curl "{{base_url}}/api/v1/vehicle?placa=PSS0O37"
+```
+**Deve encontrar o veículo** automaticamente!
+
+### Passo 2: Veja os Logs
+Procure por:
+```
+WARN - Busca normal por placa 'PSS0O37' não retornou resultados. Tentando busca alternativa...
+INFO - 🔍 BUSCA ALTERNATIVA POR PLACA: 'PSS0O37'
+INFO - ✅ MATCH ENCONTRADO: 'PSS0O37' == 'PSS0037' (variação: 'PSS0037')
+```
+
+### Passo 3: Teste o Debug Específico
+```bash
+curl "{{base_url}}/api/v1/vehicle/debug/busca-alternativa?placa=PSS0O37"
+```
 
 ## 📞 Resultado Esperado
 
-Após identificar a causa raiz, você deve conseguir:
-- ✅ Buscar por placa e encontrar o registro correto
-- ✅ Ver logs claros sobre o processo de criptografia
-- ✅ Entender se o problema é normalização, criptografia ou consulta SQL
+### ✅ Agora você deve conseguir:
+- ✅ **Buscar por `PSS0O37`** e encontrar o veículo
+- ✅ **Ver logs claros** sobre qual variação foi encontrada
+- ✅ **Entender** se o problema era `O` vs `0` ou outra normalização
+- ✅ **Usar qualquer variação** da placa (`PSS0O37`, `PSS0037`, etc.)
+
+### 🔍 Se ainda não funcionar:
+1. Execute `/debug/decrypt-placas` para ver todas as placas
+2. Execute `/debug/busca-alternativa?placa=PSS0O37` para teste detalhado
+3. Verifique os logs para entender onde falha
