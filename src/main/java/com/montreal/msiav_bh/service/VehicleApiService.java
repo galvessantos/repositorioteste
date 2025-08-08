@@ -102,6 +102,7 @@ public class VehicleApiService {
         return false;
     }
 
+    // ✅ CORREÇÃO: Background update mais seguro
     private void scheduleBackgroundCacheUpdate(LocalDate dataInicio, LocalDate dataFim) {
         CompletableFuture.runAsync(() -> {
                     try {
@@ -339,8 +340,8 @@ public class VehicleApiService {
         }
     }
 
-    public QueryDetailResponseDTO searchContract(String contrato, String placa) {
+    public QueryDetailResponseDTO searchContract(String contrato) {
         log.info("Buscando detalhes do contrato: {}", contrato);
-        return apiQueryService.searchContract(contrato, placa);
+        return apiQueryService.searchContract(contrato);
     }
 }

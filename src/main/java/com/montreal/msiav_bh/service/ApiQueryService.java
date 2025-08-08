@@ -314,28 +314,4 @@ public class ApiQueryService {
             return "Token válido por mais " + minutesUntilExpiration + " minutos";
         }
     }
-
-    public QueryDetailResponseDTO searchContract(String contractNumber, String placa) {
-        return executeWithTokenRetry(() -> doSearchContract(contractNumber, placa));
-    }
-
-    private QueryDetailResponseDTO doSearchContract(String contractNumber, String placa) {
-        String url = config.getBaseUrl() + "/api/recepcaoContrato/receber";
-        String token = authenticate();
-
-        Map<String, String> body = new HashMap<>();
-        body.put("nu_contrato", contractNumber);
-        body.put("nu_placa", placa);
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(token);
-        headers.setContentType(MediaType.APPLICATION_JSON);
-
-        HttpEntity<Map<String, String>> requestEntity = new HttpEntity<>(body, headers);
-
-        ResponseEntity<QueryDetailResponseDTO> response =
-                restTemplate.postForEntity(url, requestEntity, QueryDetailResponseDTO.class);
-
-        return response.getBody();
-    }
 }
