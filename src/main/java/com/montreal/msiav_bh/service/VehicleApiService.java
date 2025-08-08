@@ -43,7 +43,7 @@ public class VehicleApiService {
         log.info("==== INICIANDO BUSCA DE VEÍCULOS (DATABASE-FIRST) ====");
 
         try {
-            PageDTO<VehicleDTO> databaseResult = getFromDatabase(
+            PageDTO<VehicleDTO> databaseResult = getFromDatabaseDecrypted(
                     dataInicio, dataFim, credor, contrato, protocolo, cpf,
                     uf, cidade, modelo, placa, etapaAtual, statusApreensao,
                     page, size, sortBy, sortDir
@@ -54,35 +54,35 @@ public class VehicleApiService {
             if (cacheStatus.getTotalRecords() == 0 ||
                     (databaseResult.content().isEmpty() && cacheStatus.getMinutesSinceLastSync() > 60)) {
 
-                log.warn("Cache vazio ou muito desatualizado - buscando da API");
-                return fetchFromApiWithUpdate(dataInicio, dataFim, credor, contrato,
+                log.warn("Cache vazio ou muito desatualizado - buscando da API e atualizando cache");
+                return fetchFromApiAndUpdateCache(dataInicio, dataFim, credor, contrato,
                         protocolo, cpf, uf, cidade, modelo, placa, etapaAtual,
                         statusApreensao, page, size, sortBy, sortDir);
             }
 
             if (!cacheStatus.isValid() && cacheStatus.getTotalRecords() > 0) {
                 log.info("Cache desatualizado - iniciando atualização em background");
-                CompletableFuture.runAsync(() -> updateCacheInBackground(dataInicio, dataFim));
+                CompletableFuture.runAsync(() -> updateCacheInBackgroundEncrypted(dataInicio, dataFim));
             }
 
-            log.info("Retornando {} registros do PostgreSQL", databaseResult.totalElements());
+            log.info("Retornando {} registros do PostgreSQL descriptografados", databaseResult.totalElements());
             return databaseResult;
 
         } catch (Exception e) {
             log.error("Erro ao buscar do banco - tentando API como fallback: {}", e.getMessage());
-            return fetchFromApiDirect(dataInicio, dataFim, credor, contrato,
+            return fetchFromApiDirectDecrypted(dataInicio, dataFim, credor, contrato,
                     protocolo, cpf, uf, cidade, modelo, placa, etapaAtual,
                     statusApreensao, page, size, sortBy, sortDir);
         }
     }
 
-    private PageDTO<VehicleDTO> getFromDatabase(
+    private PageDTO<VehicleDTO> getFromDatabaseDecrypted(
             LocalDate dataInicio, LocalDate dataFim, String credor, String contrato,
             String protocolo, String cpf, String uf, String cidade, String modelo,
             String placa, String etapaAtual, String statusApreensao,
             int page, int size, String sortBy, String sortDir) {
 
-        log.debug("Consultando PostgreSQL com filtros aplicados");
+        log.debug("Consultando PostgreSQL e descriptografando para frontend");
 
         Sort.Direction direction = "desc".equalsIgnoreCase(sortDir) ? Sort.Direction.DESC : Sort.Direction.ASC;
         Pageable pageable = PageRequest.of(page, size, Sort.by(direction, sortBy));
@@ -100,39 +100,42 @@ public class VehicleApiService {
         );
     }
 
-    private PageDTO<VehicleDTO> fetchFromApiWithUpdate(
+    private PageDTO<VehicleDTO> fetchFromApiAndUpdateCache(
             LocalDate dataInicio, LocalDate dataFim, String credor, String contrato,
             String protocolo, String cpf, String uf, String cidade, String modelo,
             String placa, String etapaAtual, String statusApreensao,
             int page, int size, String sortBy, String sortDir) {
 
-        log.info("Buscando dados da API externa e atualizando cache");
+        log.info("Buscando dados da API externa, salvando criptografados no cache e retornando descriptografados");
 
         try {
             LocalDate searchStart = dataInicio != null ? dataInicio : LocalDate.now().minusDays(30);
             LocalDate searchEnd = dataFim != null ? dataFim : LocalDate.now();
 
-            CompletableFuture<List<VehicleDTO>> future = CompletableFuture.supplyAsync(() -> {
+            CompletableFuture<PageDTO<VehicleDTO>> future = CompletableFuture.supplyAsync(() -> {
                 List<ConsultaNotificationResponseDTO.NotificationData> notifications =
                         apiQueryService.searchByPeriod(searchStart, searchEnd);
-                return vehicleInquiryMapper.mapToVeiculoDTOForResponse(notifications);
+
+                List<VehicleDTO> vehiclesEncrypted = vehicleInquiryMapper.mapToVeiculoDTO(notifications);
+                log.info("Dados da API convertidos e criptografados: {} veículos", vehiclesEncrypted.size());
+
+                if (!vehiclesEncrypted.isEmpty()) {
+                    CacheUpdateContext context = CacheUpdateContext.filteredSearch(
+                            searchStart, searchEnd, credor, contrato, protocolo, cpf
+                    );
+                    vehicleCacheService.updateCache(vehiclesEncrypted, context);
+                    log.info("Cache atualizado com dados criptografados");
+
+                    return getFromDatabaseDecrypted(dataInicio, dataFim, credor, contrato, protocolo,
+                            cpf, uf, cidade, modelo, placa, etapaAtual, statusApreensao,
+                            page, size, sortBy, sortDir);
+                }
+
+                log.warn("API retornou lista vazia");
+                return PageDTO.of(List.<VehicleDTO>of(), page, size, 0);
             });
 
-            List<VehicleDTO> vehicles = future.get(30, TimeUnit.SECONDS);
-
-            if (!vehicles.isEmpty()) {
-                CacheUpdateContext context = CacheUpdateContext.filteredSearch(
-                        searchStart, searchEnd, credor, contrato, protocolo, cpf
-                );
-                vehicleCacheService.updateCache(vehicles, context);
-
-                return getFromDatabase(dataInicio, dataFim, credor, contrato, protocolo,
-                        cpf, uf, cidade, modelo, placa, etapaAtual, statusApreensao,
-                        page, size, sortBy, sortDir);
-            }
-
-            log.warn("API retornou lista vazia");
-            return PageDTO.of(List.of(), page, size, 0);
+            return future.get(30, TimeUnit.SECONDS);
 
         } catch (Exception e) {
             log.error("Erro ao buscar da API: {}", e.getMessage());
@@ -140,13 +143,36 @@ public class VehicleApiService {
         }
     }
 
-    private PageDTO<VehicleDTO> fetchFromApiDirect(
+    private void updateCacheInBackgroundEncrypted(LocalDate dataInicio, LocalDate dataFim) {
+        try {
+            log.debug("Iniciando atualização de cache em background com criptografia");
+
+            LocalDate searchStart = dataInicio != null ? dataInicio : LocalDate.now().minusDays(30);
+            LocalDate searchEnd = dataFim != null ? dataFim : LocalDate.now();
+
+            List<ConsultaNotificationResponseDTO.NotificationData> notifications =
+                    apiQueryService.searchByPeriod(searchStart, searchEnd);
+
+            List<VehicleDTO> vehicles = vehicleInquiryMapper.mapToVeiculoDTO(notifications);
+
+            if (!vehicles.isEmpty()) {
+                CacheUpdateContext context = CacheUpdateContext.scheduledRefresh(searchStart, searchEnd);
+                vehicleCacheService.updateCacheThreadSafe(vehicles, context);
+                log.info("Cache atualizado em background com {} registros criptografados", vehicles.size());
+            }
+
+        } catch (Exception e) {
+            log.error("Erro na atualização em background do cache: {}", e.getMessage());
+        }
+    }
+
+    private PageDTO<VehicleDTO> fetchFromApiDirectDecrypted(
             LocalDate dataInicio, LocalDate dataFim, String credor, String contrato,
             String protocolo, String cpf, String uf, String cidade, String modelo,
             String placa, String etapaAtual, String statusApreensao,
             int page, int size, String sortBy, String sortDir) {
 
-        log.info("Buscando diretamente da API (modo emergência)");
+        log.info("Buscando diretamente da API (modo emergência) - dados descriptografados para frontend");
 
         try {
             LocalDate searchStart = dataInicio != null ? dataInicio : LocalDate.now().minusDays(30);
@@ -170,29 +196,6 @@ public class VehicleApiService {
         }
     }
 
-    private void updateCacheInBackground(LocalDate dataInicio, LocalDate dataFim) {
-        try {
-            log.debug("Iniciando atualização de cache em background");
-
-            LocalDate searchStart = dataInicio != null ? dataInicio : LocalDate.now().minusDays(30);
-            LocalDate searchEnd = dataFim != null ? dataFim : LocalDate.now();
-
-            List<ConsultaNotificationResponseDTO.NotificationData> notifications =
-                    apiQueryService.searchByPeriod(searchStart, searchEnd);
-
-            List<VehicleDTO> vehicles = vehicleInquiryMapper.mapToVeiculoDTO(notifications);
-
-            if (!vehicles.isEmpty()) {
-                CacheUpdateContext context = CacheUpdateContext.scheduledRefresh(searchStart, searchEnd);
-                vehicleCacheService.updateCacheThreadSafe(vehicles, context);
-                log.info("Cache atualizado em background com {} registros", vehicles.size());
-            }
-
-        } catch (Exception e) {
-            log.error("Erro na atualização em background do cache: {}", e.getMessage());
-        }
-    }
-
     public PageDTO<VehicleDTO> fallbackToDatabase(
             LocalDate dataInicio, LocalDate dataFim, String credor, String contrato,
             String protocolo, String cpf, String uf, String cidade, String modelo,
@@ -203,7 +206,7 @@ public class VehicleApiService {
                 throwable.getMessage());
 
         try {
-            return getFromDatabase(dataInicio, dataFim, credor, contrato, protocolo,
+            return getFromDatabaseDecrypted(dataInicio, dataFim, credor, contrato, protocolo,
                     cpf, uf, cidade, modelo, placa, etapaAtual, statusApreensao,
                     page, size, sortBy, sortDir);
         } catch (Exception e) {

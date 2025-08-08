@@ -5,6 +5,7 @@ import com.montreal.msiav_bh.dto.VehicleDTO;
 import com.montreal.msiav_bh.entity.VehicleCache;
 import com.montreal.msiav_bh.mapper.VehicleCacheMapper;
 import com.montreal.msiav_bh.repository.VehicleCacheRepository;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,6 +18,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -36,6 +38,435 @@ public class VehicleCacheService {
 
     @Value("${vehicle.cache.retention.days:7}")
     private int cacheRetentionDays;
+
+    private final Map<String, Long> contratoToIdCache = new ConcurrentHashMap<>();
+    private final Map<String, Long> placaToIdCache = new ConcurrentHashMap<>();
+    private final Map<String, Long> protocoloToIdCache = new ConcurrentHashMap<>();
+
+    @PostConstruct
+    public void initializeCache() {
+        refreshInMemoryCache();
+    }
+
+    private void refreshInMemoryCache() {
+        log.info("Inicializando cache em memória para otimizar comparações...");
+
+        contratoToIdCache.clear();
+        placaToIdCache.clear();
+        protocoloToIdCache.clear();
+
+        List<VehicleCache> allVehicles = vehicleCacheRepository.findAll();
+
+        for (VehicleCache vehicle : allVehicles) {
+            try {
+                String contratoDecrypted = cryptoService.decryptContrato(vehicle.getContrato());
+                if (contratoDecrypted != null && !"N/A".equals(contratoDecrypted)) {
+                    contratoToIdCache.put(contratoDecrypted.trim(), vehicle.getId());
+                }
+
+                String placaDecrypted = cryptoService.decryptPlaca(vehicle.getPlaca());
+                if (placaDecrypted != null && !"N/A".equals(placaDecrypted)) {
+                    placaToIdCache.put(placaDecrypted.trim().toUpperCase(), vehicle.getId());
+                }
+
+                if (vehicle.getProtocolo() != null && !"N/A".equals(vehicle.getProtocolo())) {
+                    protocoloToIdCache.put(vehicle.getProtocolo().trim(), vehicle.getId());
+                }
+            } catch (Exception e) {
+                log.trace("Erro ao descriptografar veículo ID {}: {}", vehicle.getId(), e.getMessage());
+            }
+        }
+
+        log.info("Cache em memória inicializado: {} contratos, {} placas, {} protocolos",
+                contratoToIdCache.size(), placaToIdCache.size(), protocoloToIdCache.size());
+    }
+
+    @Transactional
+    public void updateCacheThreadSafe(List<VehicleDTO> vehicles, CacheUpdateContext context) {
+        cacheLock.lock();
+        try {
+            log.info("Atualizando cache de forma thread-safe com {} veículos. Contexto: {}",
+                    vehicles.size(), context);
+
+            cleanDuplicates();
+            updateCache(vehicles, context);
+
+        } finally {
+            cacheLock.unlock();
+        }
+    }
+
+    @Transactional
+    public void updateCache(List<VehicleDTO> vehicles, CacheUpdateContext context) {
+        log.info("Atualizando cache do PostgreSQL com {} veículos. Contexto: {}", vehicles.size(), context);
+
+        try {
+            LocalDateTime syncDate = LocalDateTime.now();
+
+            if (context.isFullRefresh()) {
+                handleFullRefresh(vehicles, syncDate, context);
+            } else {
+                handleIncrementalUpdate(vehicles, syncDate, context);
+            }
+
+            refreshInMemoryCache();
+
+            cleanOldCache();
+            log.info("Cache do PostgreSQL atualizado com sucesso (dados sensíveis criptografados)");
+        } catch (Exception e) {
+            log.error("Erro ao atualizar cache do PostgreSQL", e);
+            throw new RuntimeException("Falha ao atualizar cache", e);
+        }
+    }
+
+    private void handleFullRefresh(List<VehicleDTO> vehicles, LocalDateTime syncDate, CacheUpdateContext context) {
+        log.debug("Executando atualização completa do cache");
+
+        if (vehicles.isEmpty() && !context.isHasFilters()) {
+            long currentCount = vehicleCacheRepository.count();
+            if (currentCount > 100) {
+                log.warn("API retornou vazio mas cache tem {} registros - preservando dados atuais", currentCount);
+                return;
+            } else {
+                log.warn("API retornou vazio e cache pequeno - limpando cache");
+                vehicleCacheRepository.deleteAll();
+                return;
+            }
+        }
+
+        if (vehicles.isEmpty()) {
+            log.info("API retornou vazio com filtros - preservando cache existente");
+            return;
+        }
+
+        Set<String> activePlacasEncrypted = vehicles.stream()
+                .map(VehicleDTO::placa)
+                .filter(Objects::nonNull)
+                .filter(placa -> !"N/A".equals(placa) && !placa.trim().isEmpty())
+                .map(cryptoService::encryptPlaca)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        if (!activePlacasEncrypted.isEmpty()) {
+            int removedCount = vehicleCacheRepository.countByPlacaNotIn(activePlacasEncrypted);
+
+            long totalCache = vehicleCacheRepository.count();
+            if (removedCount > totalCache * 0.8) {
+                log.warn("Tentativa de remover {} de {} registros ({}%) - preservando dados",
+                        removedCount, totalCache, (removedCount * 100 / totalCache));
+            } else {
+                vehicleCacheRepository.deleteByPlacaNotIn(activePlacasEncrypted);
+                log.info("Removidos {} veículos não mais presentes na API", removedCount);
+            }
+        }
+
+        updateOrInsertVehicles(vehicles, syncDate);
+    }
+
+    private void handleIncrementalUpdate(List<VehicleDTO> vehicles, LocalDateTime syncDate, CacheUpdateContext context) {
+        log.debug("Executando atualização incremental do cache");
+        updateOrInsertVehicles(vehicles, syncDate);
+        log.info("Atualização incremental completada para {} veículos", vehicles.size());
+    }
+
+    private void updateOrInsertVehicles(List<VehicleDTO> vehicles, LocalDateTime syncDate) {
+        int updated = 0;
+        int inserted = 0;
+        int duplicateSkipped = 0;
+        int noChangesFound = 0;
+
+        log.info("=== PROCESSANDO {} VEÍCULOS DA API ===", vehicles.size());
+
+        for (VehicleDTO dto : vehicles) {
+            try {
+                Optional<VehicleCache> existing = findExistingVehicleOptimized(dto);
+
+                if (existing.isPresent()) {
+                    VehicleCache existingEntity = existing.get();
+
+                    if (hasDataChanges(existingEntity, dto)) {
+                        VehicleCache updatedEntity = updateExistingVehicle(existingEntity, dto, syncDate);
+                        vehicleCacheRepository.save(updatedEntity);
+                        updated++;
+
+                        updateInMemoryCache(dto, existingEntity.getId());
+
+                        log.debug("✓ Veículo ATUALIZADO: contrato={}, placa={}",
+                                maskSensitiveData(dto.contrato()), maskSensitiveData(dto.placa()));
+                    } else {
+                        existingEntity.setApiSyncDate(syncDate);
+                        vehicleCacheRepository.save(existingEntity);
+                        noChangesFound++;
+                        log.trace("⚡ Veículo SEM MUDANÇAS: contrato={}, placa={}",
+                                maskSensitiveData(dto.contrato()), maskSensitiveData(dto.placa()));
+                    }
+                } else {
+                    VehicleCache newEntity = vehicleCacheMapper.toEntity(dto, syncDate);
+                    VehicleCache savedEntity = vehicleCacheRepository.save(newEntity);
+                    inserted++;
+
+                    updateInMemoryCache(dto, savedEntity.getId());
+
+                    log.debug("➕ NOVO veículo inserido: contrato={}, placa={}",
+                            maskSensitiveData(dto.contrato()), maskSensitiveData(dto.placa()));
+                }
+            } catch (Exception e) {
+                if (isDuplicateConstraintError(e)) {
+                    log.debug("Registro duplicado ignorado: contrato={}, placa={}",
+                            maskSensitiveData(dto.contrato()), maskSensitiveData(dto.placa()));
+                    duplicateSkipped++;
+                } else {
+                    log.error("Erro inesperado ao processar veículo: {}", e.getMessage());
+                    throw e;
+                }
+            }
+        }
+
+        log.info("=== RESULTADO DA SINCRONIZAÇÃO ===");
+        log.info("{} atualizados (com mudanças)", updated);
+        log.info("{} sem mudanças (só sync date)", noChangesFound);
+        log.info("{} novos inseridos", inserted);
+        log.info("{} duplicados ignorados", duplicateSkipped);
+    }
+
+    private Optional<VehicleCache> findExistingVehicleOptimized(VehicleDTO dto) {
+
+        String contratoDecrypted = cryptoService.decryptContrato(dto.contrato());
+        if (contratoDecrypted != null && !"N/A".equals(contratoDecrypted)) {
+            Long vehicleId = contratoToIdCache.get(contratoDecrypted.trim());
+            if (vehicleId != null) {
+                Optional<VehicleCache> vehicle = vehicleCacheRepository.findById(vehicleId);
+                if (vehicle.isPresent()) {
+                    log.debug("Veículo encontrado por contrato no cache em memória");
+                    return vehicle;
+                }
+
+                contratoToIdCache.remove(contratoDecrypted.trim());
+            }
+        }
+
+
+        String placaDecrypted = cryptoService.decryptPlaca(dto.placa());
+        if (placaDecrypted != null && !"N/A".equals(placaDecrypted)) {
+            Long vehicleId = placaToIdCache.get(placaDecrypted.trim().toUpperCase());
+            if (vehicleId != null) {
+                Optional<VehicleCache> vehicle = vehicleCacheRepository.findById(vehicleId);
+                if (vehicle.isPresent()) {
+                    log.debug("Veículo encontrado por placa no cache em memória");
+                    return vehicle;
+                }
+
+                placaToIdCache.remove(placaDecrypted.trim().toUpperCase());
+            }
+        }
+
+
+        if (dto.protocolo() != null && !"N/A".equals(dto.protocolo())) {
+            Long vehicleId = protocoloToIdCache.get(dto.protocolo().trim());
+            if (vehicleId != null) {
+                Optional<VehicleCache> vehicle = vehicleCacheRepository.findById(vehicleId);
+                if (vehicle.isPresent()) {
+                    log.debug("Veículo encontrado por protocolo no cache em memória");
+                    return vehicle;
+                }
+
+                protocoloToIdCache.remove(dto.protocolo().trim());
+            }
+        }
+
+        log.debug("Nenhum veículo existente encontrado - será inserido como novo");
+        return Optional.empty();
+    }
+
+    private void updateInMemoryCache(VehicleDTO dto, Long vehicleId) {
+        try {
+            String contratoDecrypted = cryptoService.decryptContrato(dto.contrato());
+            if (contratoDecrypted != null && !"N/A".equals(contratoDecrypted)) {
+                contratoToIdCache.put(contratoDecrypted.trim(), vehicleId);
+            }
+
+            String placaDecrypted = cryptoService.decryptPlaca(dto.placa());
+            if (placaDecrypted != null && !"N/A".equals(placaDecrypted)) {
+                placaToIdCache.put(placaDecrypted.trim().toUpperCase(), vehicleId);
+            }
+
+            if (dto.protocolo() != null && !"N/A".equals(dto.protocolo())) {
+                protocoloToIdCache.put(dto.protocolo().trim(), vehicleId);
+            }
+        } catch (Exception e) {
+            log.warn("Erro ao atualizar cache em memória para veículo ID {}: {}", vehicleId, e.getMessage());
+        }
+    }
+
+    private boolean hasDataChanges(VehicleCache existing, VehicleDTO dto) {
+        try {
+            String existingContrato = cryptoService.decryptContrato(existing.getContrato());
+            String existingPlaca = cryptoService.decryptPlaca(existing.getPlaca());
+
+            String dtoContratoDecrypted = cryptoService.decryptContrato(dto.contrato());
+            String dtoPlacaDecrypted = cryptoService.decryptPlaca(dto.placa());
+
+            boolean contratoChanged = !Objects.equals(
+                    normalizeString(existingContrato),
+                    normalizeString(dtoContratoDecrypted)
+            );
+
+            boolean placaChanged = !Objects.equals(
+                    normalizeString(existingPlaca),
+                    normalizeString(dtoPlacaDecrypted)
+            );
+
+            boolean credorChanged = !Objects.equals(
+                    normalizeString(existing.getCredor()),
+                    normalizeString(dto.credor())
+            );
+
+            boolean dataPedidoChanged = !Objects.equals(existing.getDataPedido(), dto.dataPedido());
+            boolean modeloChanged = !Objects.equals(normalizeString(existing.getModelo()), normalizeString(dto.modelo()));
+            boolean ufChanged = !Objects.equals(normalizeString(existing.getUf()), normalizeString(dto.uf()));
+            boolean cidadeChanged = !Objects.equals(normalizeString(existing.getCidade()), normalizeString(dto.cidade()));
+            boolean cpfDevedorChanged = !Objects.equals(normalizeString(existing.getCpfDevedor()), normalizeString(dto.cpfDevedor()));
+            boolean protocoloChanged = !Objects.equals(normalizeString(existing.getProtocolo()), normalizeString(dto.protocolo()));
+            boolean etapaAtualChanged = !Objects.equals(normalizeString(existing.getEtapaAtual()), normalizeString(dto.etapaAtual()));
+            boolean statusApreensaoChanged = !Objects.equals(normalizeString(existing.getStatusApreensao()), normalizeString(dto.statusApreensao()));
+            boolean ultimaMovimentacaoChanged = !Objects.equals(existing.getUltimaMovimentacao(), dto.ultimaMovimentacao());
+
+            boolean hasChanges = contratoChanged || placaChanged || credorChanged || dataPedidoChanged ||
+                    modeloChanged || ufChanged || cidadeChanged || cpfDevedorChanged ||
+                    protocoloChanged || etapaAtualChanged || statusApreensaoChanged || ultimaMovimentacaoChanged;
+
+            if (hasChanges) {
+                log.debug("Mudanças detectadas: contrato={}, placa={}, credor={}, dataPedido={}, " +
+                                "modelo={}, uf={}, cidade={}, cpf={}, etapa={}, status={}, ultimaMov={}",
+                        contratoChanged, placaChanged, credorChanged, dataPedidoChanged,
+                        modeloChanged, ufChanged, cidadeChanged, cpfDevedorChanged,
+                        etapaAtualChanged, statusApreensaoChanged, ultimaMovimentacaoChanged);
+            }
+
+            return hasChanges;
+
+        } catch (Exception e) {
+            log.warn("Erro ao comparar dados do veículo: {} - assumindo que há mudanças", e.getMessage());
+            return true;
+        }
+    }
+
+    private String normalizeString(String str) {
+        if (str == null || "N/A".equals(str)) {
+            return null;
+        }
+        return str.trim();
+    }
+
+    private String maskSensitiveData(String data) {
+        if (data == null || data.length() <= 4) {
+            return "***";
+        }
+        return data.substring(0, 2) + "***" + data.substring(data.length() - 2);
+    }
+
+    private boolean isDuplicateConstraintError(Exception e) {
+        String message = e.getMessage();
+        return message != null && (
+                message.contains("constraint") ||
+                        message.contains("duplicate") ||
+                        message.contains("unique") ||
+                        message.contains("violates unique constraint")
+        );
+    }
+
+    private VehicleCache updateExistingVehicle(VehicleCache existing, VehicleDTO dto, LocalDateTime syncDate) {
+        existing.setCredor(dto.credor());
+        existing.setDataPedido(dto.dataPedido());
+        existing.setContrato(dto.contrato());
+        existing.setPlaca(dto.placa());
+        existing.setModelo(dto.modelo());
+        existing.setUf(dto.uf());
+        existing.setCidade(dto.cidade());
+        existing.setCpfDevedor(dto.cpfDevedor());
+        existing.setProtocolo(dto.protocolo());
+        existing.setEtapaAtual(dto.etapaAtual());
+        existing.setStatusApreensao(dto.statusApreensao());
+        existing.setUltimaMovimentacao(dto.ultimaMovimentacao());
+        existing.setApiSyncDate(syncDate);
+
+        return existing;
+    }
+
+    @Transactional
+    public void cleanDuplicates() {
+        log.info("Iniciando limpeza de duplicatas usando cache em memória");
+
+        try {
+            Map<String, List<Long>> contratoGroups = new HashMap<>();
+            Map<String, List<Long>> placaGroups = new HashMap<>();
+
+            for (Map.Entry<String, Long> entry : contratoToIdCache.entrySet()) {
+                contratoGroups.computeIfAbsent(entry.getKey(), k -> new ArrayList<>()).add(entry.getValue());
+            }
+
+            for (Map.Entry<String, Long> entry : placaToIdCache.entrySet()) {
+                placaGroups.computeIfAbsent(entry.getKey(), k -> new ArrayList<>()).add(entry.getValue());
+            }
+
+            int deletedCount = 0;
+
+            for (List<Long> duplicateIds : contratoGroups.values()) {
+                if (duplicateIds.size() > 1) {
+                    deletedCount += removeDuplicates(duplicateIds, "contrato");
+                }
+            }
+
+            for (List<Long> duplicateIds : placaGroups.values()) {
+                if (duplicateIds.size() > 1) {
+                    List<Long> stillExisting = duplicateIds.stream()
+                            .filter(vehicleCacheRepository::existsById)
+                            .collect(Collectors.toList());
+
+                    if (stillExisting.size() > 1) {
+                        deletedCount += removeDuplicates(stillExisting, "placa");
+                    }
+                }
+            }
+
+            if (deletedCount > 0) {
+                refreshInMemoryCache();
+            }
+
+            log.info("Limpeza de duplicatas concluída: {} registros removidos", deletedCount);
+
+        } catch (Exception e) {
+            log.error("Erro durante limpeza de duplicatas", e);
+        }
+    }
+
+    private int removeDuplicates(List<Long> duplicateIds, String campo) {
+        if (duplicateIds.size() <= 1) {
+            return 0;
+        }
+
+        List<VehicleCache> duplicates = vehicleCacheRepository.findAllById(duplicateIds);
+
+        duplicates.sort((a, b) -> {
+            if (a.getApiSyncDate() != null && b.getApiSyncDate() != null) {
+                return b.getApiSyncDate().compareTo(a.getApiSyncDate());
+            }
+            return b.getId().compareTo(a.getId());
+        });
+
+        List<VehicleCache> toDelete = duplicates.subList(1, duplicates.size());
+        vehicleCacheRepository.deleteAll(toDelete);
+
+        log.debug("Removidas {} duplicatas por {}", toDelete.size(), campo);
+        return toDelete.size();
+    }
+
+    @Transactional
+    public void cleanOldCache() {
+        LocalDateTime cutoffDate = LocalDateTime.now().minusDays(cacheRetentionDays);
+        vehicleCacheRepository.deleteOldCacheEntries(cutoffDate);
+        log.info("Cache limpo - removidas entradas antigas anteriores a {}", cutoffDate);
+    }
 
     public boolean isCacheValid() {
         Optional<LocalDateTime> lastSyncOpt = vehicleCacheRepository.findLastSyncDate();
@@ -120,415 +551,6 @@ public class VehicleCacheService {
             log.error("Erro ao descriptografar dados do veículo ID {}: {}", entity.getId(), e.getMessage());
             return vehicleCacheMapper.toDTO(entity);
         }
-    }
-
-    @Transactional
-    public void updateCacheThreadSafe(List<VehicleDTO> vehicles, CacheUpdateContext context) {
-        cacheLock.lock();
-        try {
-            log.info("Atualizando cache de forma thread-safe com {} veículos. Contexto: {}",
-                    vehicles.size(), context);
-
-            cleanDuplicates();
-
-            updateCache(vehicles, context);
-
-        } finally {
-            cacheLock.unlock();
-        }
-    }
-
-    @Transactional
-    public void updateCache(List<VehicleDTO> vehicles, CacheUpdateContext context) {
-        log.info("Atualizando cache do PostgreSQL com {} veículos. Contexto: {}",
-                vehicles.size(), context);
-
-        try {
-            LocalDateTime syncDate = LocalDateTime.now();
-
-            if (context.isFullRefresh()) {
-                handleFullRefresh(vehicles, syncDate, context);
-            } else {
-                handleIncrementalUpdate(vehicles, syncDate, context);
-            }
-
-            cleanOldCache();
-            log.info("Cache do PostgreSQL atualizado com sucesso (dados sensíveis criptografados)");
-        } catch (Exception e) {
-            log.error("Erro ao atualizar cache do PostgreSQL", e);
-            throw new RuntimeException("Falha ao atualizar cache", e);
-        }
-    }
-
-    private void handleFullRefresh(List<VehicleDTO> vehicles, LocalDateTime syncDate, CacheUpdateContext context) {
-        log.debug("Executando atualização completa do cache");
-
-        if (vehicles.isEmpty() && !context.isHasFilters()) {
-            long currentCount = vehicleCacheRepository.count();
-            if (currentCount > 100) {
-                log.warn("API retornou vazio mas cache tem {} registros - preservando dados atuais", currentCount);
-                return;
-            } else {
-                log.warn("API retornou vazio e cache pequeno - limpando cache");
-                vehicleCacheRepository.deleteAll();
-                return;
-            }
-        }
-
-        if (vehicles.isEmpty()) {
-            log.info("API retornou vazio com filtros - preservando cache existente");
-            return;
-        }
-
-        Set<String> activePlacasEncrypted = vehicles.stream()
-                .map(VehicleDTO::placa)
-                .filter(Objects::nonNull)
-                .filter(placa -> !"N/A".equals(placa) && !placa.trim().isEmpty())
-                .map(cryptoService::encryptPlaca)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
-
-        if (!activePlacasEncrypted.isEmpty()) {
-            int removedCount = vehicleCacheRepository.countByPlacaNotIn(activePlacasEncrypted);
-
-            long totalCache = vehicleCacheRepository.count();
-            if (removedCount > totalCache * 0.8) {
-                log.warn("Tentativa de remover {} de {} registros ({}%) - preservando dados",
-                        removedCount, totalCache, (removedCount * 100 / totalCache));
-            } else {
-                vehicleCacheRepository.deleteByPlacaNotIn(activePlacasEncrypted);
-                log.info("Removidos {} veículos não mais presentes na API", removedCount);
-            }
-        }
-
-        updateOrInsertVehicles(vehicles, syncDate);
-    }
-
-    private void handleIncrementalUpdate(List<VehicleDTO> vehicles, LocalDateTime syncDate, CacheUpdateContext context) {
-        log.debug("Executando atualização incremental do cache");
-        updateOrInsertVehicles(vehicles, syncDate);
-        log.info("Atualização incremental completada para {} veículos", vehicles.size());
-    }
-
-    private void updateOrInsertVehicles(List<VehicleDTO> vehicles, LocalDateTime syncDate) {
-        int updated = 0;
-        int inserted = 0;
-        int duplicateSkipped = 0;
-        int noChangesFound = 0;
-
-        log.info("=== PROCESSANDO {} VEÍCULOS DA API ===", vehicles.size());
-
-        for (VehicleDTO dto : vehicles) {
-            try {
-                String placaDescriptografada = cryptoService.decryptPlaca(dto.placa());
-                Optional<VehicleCache> existing = findExistingVehicle(dto);
-
-                if (existing.isPresent()) {
-                    VehicleCache existingEntity = existing.get();
-
-                    if (hasDataChanges(existingEntity, dto)) {
-                        VehicleCache updatedEntity = updateExistingVehicle(existingEntity, dto, syncDate);
-                        vehicleCacheRepository.save(updatedEntity);
-                        updated++;
-                        log.debug("✓ Veículo ATUALIZADO (dados mudaram): placa={}", placaDescriptografada);
-                    } else {
-                        existingEntity.setApiSyncDate(syncDate);
-                        vehicleCacheRepository.save(existingEntity);
-                        noChangesFound++;
-                        log.trace("⚡ Veículo SEM MUDANÇAS (só sync date): placa={}", placaDescriptografada);
-                    }
-                } else {
-                    VehicleCache newEntity = vehicleCacheMapper.toEntity(dto, syncDate);
-                    vehicleCacheRepository.save(newEntity);
-                    inserted++;
-                    log.debug("➕ NOVO veículo inserido: placa={}", placaDescriptografada);
-                }
-            } catch (Exception e) {
-                String placaDescriptografada = cryptoService.decryptPlaca(dto.placa());
-                if (e.getMessage() != null &&
-                        (e.getMessage().contains("constraint") ||
-                                e.getMessage().contains("duplicate") ||
-                                e.getMessage().contains("unique"))) {
-                    log.debug("Registro duplicado ignorado (constraint violation): placa={}, erro={}",
-                            placaDescriptografada, e.getMessage().substring(0, Math.min(100, e.getMessage().length())));
-                    duplicateSkipped++;
-                } else if (e.getMessage() != null &&
-                        e.getMessage().contains("value too long for type character varying")) {
-                    log.error("ERRO DE TAMANHO DE CAMPO: Algum campo excede o limite do banco de dados");
-                    log.error("Placa afetada: {}", placaDescriptografada);
-                    log.error("Este erro indica que os campos criptografados são muito longos");
-                    log.error("SOLUÇÃO: Execute a migração do banco: ALTER TABLE vehicle_cache ALTER COLUMN contrato TYPE TEXT, ALTER TABLE vehicle_cache ALTER COLUMN placa TYPE TEXT;");
-                    throw new RuntimeException("Campo muito longo - necessária migração do banco de dados", e);
-                } else {
-                    log.error("Erro inesperado ao processar veículo placa={}: {}", placaDescriptografada, e.getMessage());
-                    throw e;
-                }
-            }
-        }
-
-        log.info("=== RESULTADO DA SINCRONIZAÇÃO ===");
-        log.info("{} atualizados (com mudanças)", updated);
-        log.info("{} sem mudanças (só sync date)", noChangesFound);
-        log.info("{} novos inseridos", inserted);
-        log.info("{} duplicados ignorados", duplicateSkipped);
-        log.info("Total processado: {}", vehicles.size());
-
-        if (inserted == 0 && updated == 0 && noChangesFound > 0) {
-            log.info("SINCRONIZAÇÃO PERFEITA: Dados já estavam em sincronia com a API!");
-        }
-    }
-
-    private Optional<VehicleCache> findExistingVehicle(VehicleDTO dto) {
-        log.debug("Procurando veículo existente para contrato:{}, placa:{}, protocolo:{}",
-                dto.contrato(), dto.placa(), dto.protocolo());
-
-        String dtoPlacaDecrypted = cryptoService.decryptPlaca(dto.placa());
-        String dtoContratoDecrypted = cryptoService.decryptContrato(dto.contrato());
-
-        if (dtoPlacaDecrypted != null && !"N/A".equals(dtoPlacaDecrypted) && !dtoPlacaDecrypted.trim().isEmpty()) {
-            log.debug("Buscando por placa descriptografada: {}", dtoPlacaDecrypted);
-            Optional<VehicleCache> byPlaca = findByDecryptedPlaca(dtoPlacaDecrypted);
-            if (byPlaca.isPresent()) {
-                log.debug("Veículo encontrado por placa descriptografada");
-                return byPlaca;
-            }
-        }
-
-        if (dtoContratoDecrypted != null && !"N/A".equals(dtoContratoDecrypted) && !dtoContratoDecrypted.trim().isEmpty()) {
-            log.debug("Buscando por contrato descriptografado: {}", dtoContratoDecrypted);
-            Optional<VehicleCache> byContrato = findByDecryptedContrato(dtoContratoDecrypted);
-            if (byContrato.isPresent()) {
-                log.debug("Veículo encontrado por contrato descriptografado");
-                return byContrato;
-            }
-        }
-
-        if (dto.protocolo() != null && !"N/A".equals(dto.protocolo()) && !dto.protocolo().trim().isEmpty()) {
-            Optional<VehicleCache> byProtocolo = vehicleCacheRepository.findByProtocolo(dto.protocolo());
-            if (byProtocolo.isPresent()) {
-                log.debug("Veículo encontrado por protocolo: {}", dto.protocolo());
-                return byProtocolo;
-            }
-        }
-
-        log.debug("Nenhum veículo existente encontrado - será inserido como novo");
-        return Optional.empty();
-    }
-
-    private Optional<VehicleCache> findByDecryptedPlaca(String placaPlainText) {
-        try {
-            String placaNormalizada = placaPlainText.toUpperCase().trim();
-
-            List<VehicleCache> allVehicles = vehicleCacheRepository.findByPlacaIsNotNull();
-
-            int totalVehicles = allVehicles.size();
-            log.debug("Processando {} veículos para busca por placa '{}'", totalVehicles, placaNormalizada);
-
-            for (int i = 0; i < allVehicles.size(); i++) {
-                VehicleCache vehicle = allVehicles.get(i);
-                try {
-                    String decryptedPlaca = cryptoService.decryptPlaca(vehicle.getPlaca());
-                    if (decryptedPlaca != null) {
-                        String decryptedPlacaNormalizada = decryptedPlaca.toUpperCase().trim();
-                        if (placaNormalizada.equals(decryptedPlacaNormalizada)) {
-                            log.debug("MATCH! Placa '{}' encontrada no registro {}/{} (ID: {})",
-                                    placaNormalizada, i+1, totalVehicles, vehicle.getId());
-                            return Optional.of(vehicle);
-                        }
-                    }
-                } catch (Exception e) {
-                    log.trace("Erro ao descriptografar placa do veículo ID {}: {}", vehicle.getId(), e.getMessage());
-                }
-
-                if ((i + 1) % 25 == 0) {
-                    log.trace("🔍 Progresso busca por placa '{}': {}/{} processados", placaNormalizada, i + 1, totalVehicles);
-                }
-            }
-
-            log.debug("Placa '{}' não encontrada após processar {} registros", placaNormalizada, totalVehicles);
-            return Optional.empty();
-        } catch (Exception e) {
-            log.error("Erro na busca por placa descriptografada '{}': {}", placaPlainText, e.getMessage());
-            return Optional.empty();
-        }
-    }
-
-    private Optional<VehicleCache> findByDecryptedContrato(String contratoPlainText) {
-        try {
-            String contratoNormalizado = contratoPlainText.trim();
-
-            List<VehicleCache> allVehicles = vehicleCacheRepository.findByContratoIsNotNull();
-
-            int totalVehicles = allVehicles.size();
-            log.debug("🔍 Processando {} veículos para busca por contrato '{}'", totalVehicles, contratoNormalizado);
-
-            for (int i = 0; i < allVehicles.size(); i++) {
-                VehicleCache vehicle = allVehicles.get(i);
-                try {
-                    String decryptedContrato = cryptoService.decryptContrato(vehicle.getContrato());
-                    if (contratoNormalizado.equals(decryptedContrato)) {
-                        log.debug("MATCH! Contrato '{}' encontrado no registro {}/{} (ID: {})",
-                                contratoNormalizado, i+1, totalVehicles, vehicle.getId());
-                        return Optional.of(vehicle);
-                    }
-                } catch (Exception e) {
-                    log.trace("Erro ao descriptografar contrato do veículo ID {}: {}", vehicle.getId(), e.getMessage());
-                }
-
-                if ((i + 1) % 50 == 0) {
-                    log.trace("🔍 Progresso busca por contrato '{}': {}/{} processados", contratoNormalizado, i + 1, totalVehicles);
-                }
-            }
-
-            log.debug("Contrato '{}' não encontrado após processar {} registros", contratoNormalizado, totalVehicles);
-            return Optional.empty();
-        } catch (Exception e) {
-            log.error("Erro na busca por contrato descriptografado '{}': {}", contratoPlainText, e.getMessage());
-            return Optional.empty();
-        }
-    }
-
-    private VehicleCache updateExistingVehicle(VehicleCache existing, VehicleDTO dto, LocalDateTime syncDate) {
-        existing.setCredor(dto.credor());
-        existing.setDataPedido(dto.dataPedido());
-
-        existing.setContrato(dto.contrato());
-        existing.setPlaca(dto.placa());
-
-        existing.setModelo(dto.modelo());
-        existing.setUf(dto.uf());
-        existing.setCidade(dto.cidade());
-        existing.setCpfDevedor(dto.cpfDevedor());
-        existing.setProtocolo(dto.protocolo());
-        existing.setEtapaAtual(dto.etapaAtual());
-        existing.setStatusApreensao(dto.statusApreensao());
-        existing.setUltimaMovimentacao(dto.ultimaMovimentacao());
-        existing.setApiSyncDate(syncDate);
-
-        return existing;
-    }
-
-    private boolean hasDataChanges(VehicleCache existing, VehicleDTO dto) {
-        try {
-            String existingContrato = cryptoService.decryptContrato(existing.getContrato());
-            String existingPlaca = cryptoService.decryptPlaca(existing.getPlaca());
-
-            String dtoContratoDecrypted = cryptoService.decryptContrato(dto.contrato());
-            String dtoPlacaDecrypted = cryptoService.decryptPlaca(dto.placa());
-
-            boolean contratoChanged = !Objects.equals(existingContrato, dtoContratoDecrypted);
-            boolean placaChanged = !Objects.equals(existingPlaca, dtoPlacaDecrypted);
-            boolean credorChanged = !Objects.equals(existing.getCredor(), dto.credor());
-            boolean dataPedidoChanged = !Objects.equals(existing.getDataPedido(), dto.dataPedido());
-            boolean modeloChanged = !Objects.equals(existing.getModelo(), dto.modelo());
-            boolean ufChanged = !Objects.equals(existing.getUf(), dto.uf());
-            boolean cidadeChanged = !Objects.equals(existing.getCidade(), dto.cidade());
-            boolean cpfDevedorChanged = !Objects.equals(existing.getCpfDevedor(), dto.cpfDevedor());
-            boolean protocoloChanged = !Objects.equals(existing.getProtocolo(), dto.protocolo());
-            boolean etapaAtualChanged = !Objects.equals(existing.getEtapaAtual(), dto.etapaAtual());
-            boolean statusApreensaoChanged = !Objects.equals(existing.getStatusApreensao(), dto.statusApreensao());
-            boolean ultimaMovimentacaoChanged = !Objects.equals(existing.getUltimaMovimentacao(), dto.ultimaMovimentacao());
-
-            boolean hasChanges = contratoChanged || placaChanged || credorChanged || dataPedidoChanged ||
-                    modeloChanged || ufChanged || cidadeChanged || cpfDevedorChanged ||
-                    protocoloChanged || etapaAtualChanged || statusApreensaoChanged || ultimaMovimentacaoChanged;
-
-            if (hasChanges) {
-                log.debug("Mudanças detectadas na placa {}: contrato={}, placa={}, credor={}, dataPedido={}, " +
-                                "modelo={}, uf={}, cidade={}, cpf={}, etapa={}, status={}, ultimaMov={}",
-                        dtoPlacaDecrypted, contratoChanged, placaChanged, credorChanged, dataPedidoChanged,
-                        modeloChanged, ufChanged, cidadeChanged, cpfDevedorChanged,
-                        etapaAtualChanged, statusApreensaoChanged, ultimaMovimentacaoChanged);
-            }
-
-            return hasChanges;
-
-        } catch (Exception e) {
-            log.warn("Erro ao comparar dados do veículo placa={}: {} - assumindo que há mudanças",
-                    cryptoService.decryptPlaca(dto.placa()), e.getMessage());
-            return true;
-        }
-    }
-
-    @Transactional
-    public void cleanOldCache() {
-        LocalDateTime cutoffDate = LocalDateTime.now().minusDays(cacheRetentionDays);
-        vehicleCacheRepository.deleteOldCacheEntries(cutoffDate);
-        log.info("Cache limpo - removidas entradas antigas anteriores a {}", cutoffDate);
-    }
-
-    @Transactional
-    public void cleanDuplicates() {
-        log.info("Iniciando limpeza de duplicatas no cache");
-        try {
-            long beforeCount = vehicleCacheRepository.count();
-
-
-            List<VehicleCache> allVehicles = vehicleCacheRepository.findAll();
-            Map<String, List<VehicleCache>> groupedByContrato = new HashMap<>();
-            Map<String, List<VehicleCache>> groupedByPlaca = new HashMap<>();
-
-            for (VehicleCache vehicle : allVehicles) {
-                try {
-                    String contratoDescriptografado = cryptoService.decryptContrato(vehicle.getContrato());
-                    if (contratoDescriptografado != null && !"N/A".equals(contratoDescriptografado)
-                            && !contratoDescriptografado.trim().isEmpty()) {
-                        groupedByContrato.computeIfAbsent(contratoDescriptografado, k -> new ArrayList<>()).add(vehicle);
-                    }
-
-                    String placaDescriptografada = cryptoService.decryptPlaca(vehicle.getPlaca());
-                    if (placaDescriptografada != null && !"N/A".equals(placaDescriptografada)
-                            && !placaDescriptografada.trim().isEmpty()) {
-                        groupedByPlaca.computeIfAbsent(placaDescriptografada, k -> new ArrayList<>()).add(vehicle);
-                    }
-                } catch (Exception e) {
-                    log.trace("Erro ao descriptografar dados do veículo ID {}: {}", vehicle.getId(), e.getMessage());
-                }
-            }
-
-            int deletedCount = 0;
-
-            for (Map.Entry<String, List<VehicleCache>> entry : groupedByContrato.entrySet()) {
-                List<VehicleCache> duplicates = entry.getValue();
-                if (duplicates.size() > 1) {
-                    deletedCount += processDuplicates(duplicates, "contrato");
-                }
-            }
-
-            for (Map.Entry<String, List<VehicleCache>> entry : groupedByPlaca.entrySet()) {
-                List<VehicleCache> duplicates = entry.getValue();
-                if (duplicates.size() > 1) {
-                    List<VehicleCache> stillExisting = duplicates.stream()
-                            .filter(v -> vehicleCacheRepository.existsById(v.getId()))
-                            .collect(Collectors.toList());
-
-                    if (stillExisting.size() > 1) {
-                        deletedCount += processDuplicates(stillExisting, "placa");
-                    }
-                }
-            }
-
-            long afterCount = vehicleCacheRepository.count();
-            log.info("Limpeza de duplicatas concluída: {} registros removidos (antes: {}, depois: {})",
-                    deletedCount, beforeCount, afterCount);
-        } catch (Exception e) {
-            log.error("Erro durante limpeza de duplicatas", e);
-        }
-    }
-
-    private int processDuplicates(List<VehicleCache> duplicates, String campo) {
-        duplicates.sort((a, b) -> {
-            if (a.getApiSyncDate() != null && b.getApiSyncDate() != null) {
-                return b.getApiSyncDate().compareTo(a.getApiSyncDate());
-            }
-            return b.getId().compareTo(a.getId());
-        });
-
-        List<VehicleCache> toDelete = duplicates.subList(1, duplicates.size());
-        vehicleCacheRepository.deleteAll(toDelete);
-        log.debug("Removidas {} duplicatas para {}: ***", toDelete.size(), campo);
-
-        return toDelete.size();
     }
 
     @Transactional

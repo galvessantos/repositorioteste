@@ -61,6 +61,9 @@ public class VehicleCacheUpdateJob {
             log.info("Horário: {}", startTime.format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")));
 
             try {
+                VehicleCacheService.CacheStatus statusAntes = vehicleCacheService.getCacheStatus();
+                log.info("Status do cache antes da atualização: {}", statusAntes.getMessage());
+
                 List<ConsultaNotificationResponseDTO.NotificationData> notifications =
                         tryFetchWithDateRange(daysToFetch, "período principal");
 
@@ -77,19 +80,23 @@ public class VehicleCacheUpdateJob {
                     log.info("API retornou {} notificações", notifications.size());
 
                     List<VehicleDTO> vehicles = vehicleInquiryMapper.mapToVeiculoDTO(notifications);
-                    log.info("Convertidos para {} veículos únicos", vehicles.size());
+                    log.info("Convertidos para {} veículos únicos criptografados", vehicles.size());
 
                     LocalDate endDate = LocalDate.now();
                     LocalDate startDate = endDate.minusDays(daysToFetch);
                     CacheUpdateContext context = CacheUpdateContext.scheduledRefresh(startDate, endDate);
 
-                    log.info("Iniciando sincronização com PostgreSQL...");
+                    log.info("Salvando dados criptografados no PostgreSQL...");
                     vehicleCacheService.updateCacheThreadSafe(vehicles, context);
+
+                    VehicleCacheService.CacheStatus statusDepois = vehicleCacheService.getCacheStatus();
 
                     long duration = java.time.Duration.between(startTime, LocalDateTime.now()).toSeconds();
                     log.info("==== JOB CONCLUÍDO COM SUCESSO ====");
                     log.info("Tempo de execução: {} segundos", duration);
-                    log.info("Total de veículos processados: {}", vehicles.size());
+                    log.info("Veículos processados: {}", vehicles.size());
+                    log.info("Status após atualização: {}", statusDepois.getMessage());
+                    log.info("Registros no cache: {} -> {}", statusAntes.getTotalRecords(), statusDepois.getTotalRecords());
                     log.info("Próxima execução em 10 minutos");
                 } else {
                     log.warn("==== NENHUM DADO ENCONTRADO EM TODOS OS PERÍODOS TENTADOS ====");
@@ -138,8 +145,7 @@ public class VehicleCacheUpdateJob {
                 LocalDate endDate = currentDate.minusMonths(monthsBack);
                 LocalDate startDate = endDate.minusDays(30);
 
-                if (ChronoUnit.DAYS.between(startDate, currentDate) > maxHistoricalDays)
-                {
+                if (ChronoUnit.DAYS.between(startDate, currentDate) > maxHistoricalDays) {
                     break;
                 }
 
