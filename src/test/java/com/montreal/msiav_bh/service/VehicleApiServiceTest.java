@@ -3,7 +3,6 @@ package com.montreal.msiav_bh.service;
 import com.montreal.msiav_bh.dto.PageDTO;
 import com.montreal.msiav_bh.dto.VehicleDTO;
 import com.montreal.msiav_bh.mapper.VehicleInquiryMapper;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -34,10 +33,6 @@ class VehicleApiServiceTest {
     @InjectMocks
     private VehicleApiService vehicleApiService;
 
-    @BeforeEach
-    void setUp() {
-    }
-
     @Test
     void shouldAlwaysQueryDatabaseFirst() {
         LocalDate dataInicio = LocalDate.now().minusDays(30);
@@ -50,11 +45,14 @@ class VehicleApiServiceTest {
         );
 
         Page<VehicleDTO> mockPage = new PageImpl<>(List.of(mockVehicle));
+        VehicleCacheService.CacheStatus mockCacheStatus = mock(VehicleCacheService.CacheStatus.class);
 
-        when(vehicleCacheService.isCacheValid()).thenReturn(true);
+        when(mockCacheStatus.getTotalRecords()).thenReturn(100L);
+        when(mockCacheStatus.isValid()).thenReturn(true);
+        when(mockCacheStatus.getMinutesSinceLastSync()).thenReturn(30L);
+        when(vehicleCacheService.getCacheStatus()).thenReturn(mockCacheStatus);
         when(vehicleCacheService.getFromCache(any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(mockPage);
+                any(), any(), any(), any(), any(), any(), any())).thenReturn(mockPage);
 
         PageDTO<VehicleDTO> result = vehicleApiService.getVehiclesWithFallback(
                 dataInicio, dataFim, null, null, null, null, null, null,
@@ -63,11 +61,7 @@ class VehicleApiServiceTest {
 
         assertNotNull(result);
         assertEquals(1, result.content().size());
-
-        verify(vehicleCacheService, times(1)).getFromCache(any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any(), any(), any());
-
-        verify(apiQueryService, never()).searchByPeriod(any(), any());
+        verify(vehicleCacheService, times(1)).getCacheStatus();
     }
 
     @Test
@@ -75,12 +69,25 @@ class VehicleApiServiceTest {
         LocalDate dataInicio = LocalDate.now().minusDays(30);
         LocalDate dataFim = LocalDate.now();
 
-        Page<VehicleDTO> mockPage = new PageImpl<>(List.of());
+        VehicleDTO mockVehicle = new VehicleDTO(
+                2L, "Credor Test 2", dataInicio, "654321", "XYZ-9876",
+                "Model Y", "RJ", "Rio de Janeiro", "98765432100",
+                "PROT-456", "Finalizado", "Recuperado", dataFim
+        );
 
-        when(vehicleCacheService.isCacheValid()).thenReturn(false);
+        VehicleCacheService.CacheStatus mockCacheStatus = mock(VehicleCacheService.CacheStatus.class);
+        Page<VehicleDTO> mockPageWithData = new PageImpl<>(List.of(mockVehicle));
+
+        when(mockCacheStatus.getTotalRecords()).thenReturn(50L);
+        when(mockCacheStatus.isValid()).thenReturn(false);
+        when(mockCacheStatus.getMinutesSinceLastSync()).thenReturn(30L);
+        when(vehicleCacheService.getCacheStatus()).thenReturn(mockCacheStatus);
         when(vehicleCacheService.getFromCache(any(), any(), any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(mockPage);
+                any(), any(), any(), any(), any(), any(), any())).thenReturn(mockPageWithData);
+
+        lenient().when(apiQueryService.searchByPeriod(any(), any())).thenReturn(List.of());
+        lenient().when(vehicleInquiryMapper.mapToVeiculoDTO(any())).thenReturn(List.of());
+        lenient().doNothing().when(vehicleCacheService).updateCacheThreadSafe(any(), any());
 
         PageDTO<VehicleDTO> result = vehicleApiService.getVehiclesWithFallback(
                 dataInicio, dataFim, null, null, null, null, null, null,
@@ -88,10 +95,73 @@ class VehicleApiServiceTest {
         );
 
         assertNotNull(result);
+        assertEquals(1, result.content().size());
+        verify(vehicleCacheService, times(1)).getCacheStatus();
+    }
 
-        verify(vehicleCacheService, times(1)).getFromCache(any(), any(), any(), any(),
-                any(), any(), any(), any(), any(), any(), any(), any(), any());
+    @Test
+    void shouldFetchFromApiWhenCacheIsEmpty() {
+        LocalDate dataInicio = LocalDate.now().minusDays(30);
+        LocalDate dataFim = LocalDate.now();
 
-        verify(vehicleCacheService, times(1)).isCacheValid();
+        VehicleCacheService.CacheStatus mockCacheStatus = mock(VehicleCacheService.CacheStatus.class);
+        Page<VehicleDTO> emptyPage = new PageImpl<>(List.of());
+
+        when(mockCacheStatus.getTotalRecords()).thenReturn(0L);
+        when(vehicleCacheService.getCacheStatus()).thenReturn(mockCacheStatus);
+        when(vehicleCacheService.getFromCache(any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any())).thenReturn(emptyPage);
+
+        PageDTO<VehicleDTO> result = vehicleApiService.getVehiclesWithFallback(
+                dataInicio, dataFim, null, null, null, null, null, null,
+                null, null, null, null, 0, 10, "protocolo", "asc"
+        );
+
+        assertNotNull(result);
+        assertTrue(result.content().isEmpty());
+        verify(vehicleCacheService, times(1)).getCacheStatus();
+    }
+
+    @Test
+    void shouldHandleNullCacheStatus() {
+        LocalDate dataInicio = LocalDate.now().minusDays(30);
+        LocalDate dataFim = LocalDate.now();
+
+        when(vehicleCacheService.getCacheStatus()).thenReturn(null);
+
+        assertThrows(RuntimeException.class, () -> {
+            vehicleApiService.getVehiclesWithFallback(
+                    dataInicio, dataFim, null, null, null, null, null, null,
+                    null, null, null, null, 0, 10, "protocolo", "asc"
+            );
+        });
+
+        verify(vehicleCacheService, times(1)).getCacheStatus();
+    }
+
+    @Test
+    void shouldCallApiWhenDatabaseIsEmptyAndCacheOutdated() {
+        LocalDate dataInicio = LocalDate.now().minusDays(1);
+        LocalDate dataFim = LocalDate.now();
+
+        VehicleCacheService.CacheStatus mockCacheStatus = mock(VehicleCacheService.CacheStatus.class);
+        Page<VehicleDTO> emptyPage = new PageImpl<>(List.of());
+
+        when(mockCacheStatus.getTotalRecords()).thenReturn(10L);
+        when(mockCacheStatus.getMinutesSinceLastSync()).thenReturn(90L);
+        when(vehicleCacheService.getCacheStatus()).thenReturn(mockCacheStatus);
+        when(vehicleCacheService.getFromCache(any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any())).thenReturn(emptyPage);
+        when(apiQueryService.searchByPeriod(any(), any())).thenReturn(List.of());
+
+        PageDTO<VehicleDTO> result = vehicleApiService.getVehiclesWithFallback(
+                dataInicio, dataFim, null, null, null, null, null, null,
+                null, null, null, null, 0, 10, "protocolo", "asc"
+        );
+
+        assertNotNull(result);
+        assertTrue(result.content().isEmpty());
+        verify(vehicleCacheService, times(1)).getCacheStatus();
+        verify(apiQueryService, times(1)).searchByPeriod(any(), any());
     }
 }

@@ -1,5 +1,7 @@
 package com.montreal.msiav_bh.service;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.montreal.msiav_bh.context.CacheUpdateContext;
 import com.montreal.msiav_bh.dto.VehicleDTO;
 import com.montreal.msiav_bh.entity.VehicleCache;
@@ -11,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,7 +21,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -39,25 +42,56 @@ public class VehicleCacheService {
     @Value("${vehicle.cache.retention.days:7}")
     private int cacheRetentionDays;
 
-    private final Map<String, Long> contratoToIdCache = new ConcurrentHashMap<>();
-    private final Map<String, Long> placaToIdCache = new ConcurrentHashMap<>();
-    private final Map<String, Long> protocoloToIdCache = new ConcurrentHashMap<>();
+    private final Cache<String, Long> contratoToIdCache = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(2, TimeUnit.HOURS)
+            .build();
+
+    private final Cache<String, Long> placaToIdCache = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(2, TimeUnit.HOURS)
+            .build();
+
+    private final Cache<String, Long> protocoloToIdCache = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(2, TimeUnit.HOURS)
+            .build();
 
     @PostConstruct
     public void initializeCache() {
         refreshInMemoryCache();
     }
 
+    @Scheduled(fixedRate = 3600000)
+    public void cleanupInMemoryCache() {
+        long contratoSize = contratoToIdCache.estimatedSize();
+        long placaSize = placaToIdCache.estimatedSize();
+        long protocoloSize = protocoloToIdCache.estimatedSize();
+
+        log.info("Cache em memória - Contratos: {}, Placas: {}, Protocolos: {}",
+                contratoSize, placaSize, protocoloSize);
+
+        if (contratoSize > 8000 || placaSize > 8000 || protocoloSize > 8000) {
+            log.info("Limpando cache em memória devido ao tamanho");
+            contratoToIdCache.invalidateAll();
+            placaToIdCache.invalidateAll();
+            protocoloToIdCache.invalidateAll();
+            refreshInMemoryCache();
+        }
+    }
+
     private void refreshInMemoryCache() {
         log.info("Inicializando cache em memória para otimizar comparações...");
 
-        contratoToIdCache.clear();
-        placaToIdCache.clear();
-        protocoloToIdCache.clear();
+        contratoToIdCache.invalidateAll();
+        placaToIdCache.invalidateAll();
+        protocoloToIdCache.invalidateAll();
 
-        List<VehicleCache> allVehicles = vehicleCacheRepository.findAll();
+        List<VehicleCache> recentVehicles = vehicleCacheRepository.findLatestCachedVehicles(
+                org.springframework.data.domain.PageRequest.of(0, 5000)
+        ).getContent();
 
-        for (VehicleCache vehicle : allVehicles) {
+        for (VehicleCache vehicle : recentVehicles) {
             try {
                 String contratoDecrypted = cryptoService.decryptContrato(vehicle.getContrato());
                 if (contratoDecrypted != null && !"N/A".equals(contratoDecrypted)) {
@@ -78,10 +112,9 @@ public class VehicleCacheService {
         }
 
         log.info("Cache em memória inicializado: {} contratos, {} placas, {} protocolos",
-                contratoToIdCache.size(), placaToIdCache.size(), protocoloToIdCache.size());
+                contratoToIdCache.estimatedSize(), placaToIdCache.estimatedSize(), protocoloToIdCache.estimatedSize());
     }
 
-    @Transactional
     public void updateCacheThreadSafe(List<VehicleDTO> vehicles, CacheUpdateContext context) {
         cacheLock.lock();
         try {
@@ -89,7 +122,13 @@ public class VehicleCacheService {
                     vehicles.size(), context);
 
             cleanDuplicates();
-            updateCache(vehicles, context);
+            doUpdateCache(vehicles, context);
+
+            try {
+                cleanOldCache();
+            } catch (Exception e) {
+                log.warn("Erro na limpeza do cache (não crítico): {}", e.getMessage());
+            }
 
         } finally {
             cacheLock.unlock();
@@ -97,7 +136,7 @@ public class VehicleCacheService {
     }
 
     @Transactional
-    public void updateCache(List<VehicleDTO> vehicles, CacheUpdateContext context) {
+    private void doUpdateCache(List<VehicleDTO> vehicles, CacheUpdateContext context) {
         log.info("Atualizando cache do PostgreSQL com {} veículos. Contexto: {}", vehicles.size(), context);
 
         try {
@@ -109,14 +148,16 @@ public class VehicleCacheService {
                 handleIncrementalUpdate(vehicles, syncDate, context);
             }
 
-            refreshInMemoryCache();
-
-            cleanOldCache();
             log.info("Cache do PostgreSQL atualizado com sucesso (dados sensíveis criptografados)");
         } catch (Exception e) {
             log.error("Erro ao atualizar cache do PostgreSQL", e);
             throw new RuntimeException("Falha ao atualizar cache", e);
         }
+    }
+
+    @Transactional
+    public void updateCache(List<VehicleDTO> vehicles, CacheUpdateContext context) {
+        updateCacheThreadSafe(vehicles, context);
     }
 
     private void handleFullRefresh(List<VehicleDTO> vehicles, LocalDateTime syncDate, CacheUpdateContext context) {
@@ -222,6 +263,8 @@ public class VehicleCacheService {
             }
         }
 
+        refreshInMemoryCache();
+
         log.info("=== RESULTADO DA SINCRONIZAÇÃO ===");
         log.info("{} atualizados (com mudanças)", updated);
         log.info("{} sem mudanças (só sync date)", noChangesFound);
@@ -230,47 +273,41 @@ public class VehicleCacheService {
     }
 
     private Optional<VehicleCache> findExistingVehicleOptimized(VehicleDTO dto) {
-
         String contratoDecrypted = cryptoService.decryptContrato(dto.contrato());
         if (contratoDecrypted != null && !"N/A".equals(contratoDecrypted)) {
-            Long vehicleId = contratoToIdCache.get(contratoDecrypted.trim());
+            Long vehicleId = contratoToIdCache.getIfPresent(contratoDecrypted.trim());
             if (vehicleId != null) {
                 Optional<VehicleCache> vehicle = vehicleCacheRepository.findById(vehicleId);
                 if (vehicle.isPresent()) {
                     log.debug("Veículo encontrado por contrato no cache em memória");
                     return vehicle;
                 }
-
-                contratoToIdCache.remove(contratoDecrypted.trim());
+                contratoToIdCache.invalidate(contratoDecrypted.trim());
             }
         }
 
-
         String placaDecrypted = cryptoService.decryptPlaca(dto.placa());
         if (placaDecrypted != null && !"N/A".equals(placaDecrypted)) {
-            Long vehicleId = placaToIdCache.get(placaDecrypted.trim().toUpperCase());
+            Long vehicleId = placaToIdCache.getIfPresent(placaDecrypted.trim().toUpperCase());
             if (vehicleId != null) {
                 Optional<VehicleCache> vehicle = vehicleCacheRepository.findById(vehicleId);
                 if (vehicle.isPresent()) {
                     log.debug("Veículo encontrado por placa no cache em memória");
                     return vehicle;
                 }
-
-                placaToIdCache.remove(placaDecrypted.trim().toUpperCase());
+                placaToIdCache.invalidate(placaDecrypted.trim().toUpperCase());
             }
         }
 
-
         if (dto.protocolo() != null && !"N/A".equals(dto.protocolo())) {
-            Long vehicleId = protocoloToIdCache.get(dto.protocolo().trim());
+            Long vehicleId = protocoloToIdCache.getIfPresent(dto.protocolo().trim());
             if (vehicleId != null) {
                 Optional<VehicleCache> vehicle = vehicleCacheRepository.findById(vehicleId);
                 if (vehicle.isPresent()) {
                     log.debug("Veículo encontrado por protocolo no cache em memória");
                     return vehicle;
                 }
-
-                protocoloToIdCache.remove(dto.protocolo().trim());
+                protocoloToIdCache.invalidate(dto.protocolo().trim());
             }
         }
 
@@ -278,7 +315,7 @@ public class VehicleCacheService {
         return Optional.empty();
     }
 
-    private void updateInMemoryCache(VehicleDTO dto, Long vehicleId) {
+    private synchronized void updateInMemoryCache(VehicleDTO dto, Long vehicleId) {
         try {
             String contratoDecrypted = cryptoService.decryptContrato(dto.contrato());
             if (contratoDecrypted != null && !"N/A".equals(contratoDecrypted)) {
@@ -393,7 +430,6 @@ public class VehicleCacheService {
         return existing;
     }
 
-    @Transactional
     public void cleanDuplicates() {
         log.info("Iniciando limpeza de duplicatas usando cache em memória");
 
@@ -401,13 +437,13 @@ public class VehicleCacheService {
             Map<String, List<Long>> contratoGroups = new HashMap<>();
             Map<String, List<Long>> placaGroups = new HashMap<>();
 
-            for (Map.Entry<String, Long> entry : contratoToIdCache.entrySet()) {
-                contratoGroups.computeIfAbsent(entry.getKey(), k -> new ArrayList<>()).add(entry.getValue());
-            }
+            contratoToIdCache.asMap().forEach((key, value) ->
+                    contratoGroups.computeIfAbsent(key, k -> new ArrayList<>()).add(value)
+            );
 
-            for (Map.Entry<String, Long> entry : placaToIdCache.entrySet()) {
-                placaGroups.computeIfAbsent(entry.getKey(), k -> new ArrayList<>()).add(entry.getValue());
-            }
+            placaToIdCache.asMap().forEach((key, value) ->
+                    placaGroups.computeIfAbsent(key, k -> new ArrayList<>()).add(value)
+            );
 
             int deletedCount = 0;
 
@@ -556,8 +592,12 @@ public class VehicleCacheService {
     @Transactional
     public void invalidateCache() {
         log.info("Invalidando todo o cache de veículos");
+        long recordsBeforeInvalidation = vehicleCacheRepository.count();
         vehicleCacheRepository.deleteAll();
-        log.info("Cache invalidado com sucesso - {} registros removidos", vehicleCacheRepository.count());
+        contratoToIdCache.invalidateAll();
+        placaToIdCache.invalidateAll();
+        protocoloToIdCache.invalidateAll();
+        log.info("Cache invalidado com sucesso - {} registros removidos", recordsBeforeInvalidation);
     }
 
     public CacheStatus getCacheStatus() {

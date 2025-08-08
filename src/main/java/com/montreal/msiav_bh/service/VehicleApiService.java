@@ -43,18 +43,20 @@ public class VehicleApiService {
         log.info("==== INICIANDO BUSCA DE VEÍCULOS (DATABASE-FIRST) ====");
 
         try {
+            VehicleCacheService.CacheStatus cacheStatus = vehicleCacheService.getCacheStatus();
+
             PageDTO<VehicleDTO> databaseResult = getFromDatabaseDecrypted(
                     dataInicio, dataFim, credor, contrato, protocolo, cpf,
                     uf, cidade, modelo, placa, etapaAtual, statusApreensao,
                     page, size, sortBy, sortDir
             );
 
-            VehicleCacheService.CacheStatus cacheStatus = vehicleCacheService.getCacheStatus();
+            boolean shouldFetchFromApi = shouldFetchFromApiBasedOnCacheState(
+                    cacheStatus, databaseResult, dataInicio, dataFim
+            );
 
-            if (cacheStatus.getTotalRecords() == 0 ||
-                    (databaseResult.content().isEmpty() && cacheStatus.getMinutesSinceLastSync() > 60)) {
-
-                log.warn("Cache vazio ou muito desatualizado - buscando da API e atualizando cache");
+            if (shouldFetchFromApi) {
+                log.warn("Condições detectadas para busca da API - cache vazio/desatualizado ou sem resultados");
                 return fetchFromApiAndUpdateCache(dataInicio, dataFim, credor, contrato,
                         protocolo, cpf, uf, cidade, modelo, placa, etapaAtual,
                         statusApreensao, page, size, sortBy, sortDir);
@@ -62,7 +64,7 @@ public class VehicleApiService {
 
             if (!cacheStatus.isValid() && cacheStatus.getTotalRecords() > 0) {
                 log.info("Cache desatualizado - iniciando atualização em background");
-                CompletableFuture.runAsync(() -> updateCacheInBackgroundEncrypted(dataInicio, dataFim));
+                scheduleBackgroundCacheUpdate(dataInicio, dataFim);
             }
 
             log.info("Retornando {} registros do PostgreSQL descriptografados", databaseResult.totalElements());
@@ -70,10 +72,49 @@ public class VehicleApiService {
 
         } catch (Exception e) {
             log.error("Erro ao buscar do banco - tentando API como fallback: {}", e.getMessage());
-            return fetchFromApiDirectDecrypted(dataInicio, dataFim, credor, contrato,
-                    protocolo, cpf, uf, cidade, modelo, placa, etapaAtual,
-                    statusApreensao, page, size, sortBy, sortDir);
+            throw e;
         }
+    }
+
+    private boolean shouldFetchFromApiBasedOnCacheState(
+            VehicleCacheService.CacheStatus cacheStatus,
+            PageDTO<VehicleDTO> databaseResult,
+            LocalDate dataInicio,
+            LocalDate dataFim) {
+
+        if (cacheStatus.getTotalRecords() == 0) {
+            log.info("Cache vazio - buscando da API");
+            return true;
+        }
+
+        if (cacheStatus.getMinutesSinceLastSync() > 60 && databaseResult.content().isEmpty()) {
+            log.info("Cache desatualizado ({}min) e sem resultados - buscando da API",
+                    cacheStatus.getMinutesSinceLastSync());
+            return true;
+        }
+
+        if (dataInicio != null && dataInicio.isAfter(LocalDate.now().minusDays(1)) &&
+                databaseResult.content().isEmpty()) {
+            log.info("Busca por período recente sem resultados - verificando API");
+            return true;
+        }
+
+        return false;
+    }
+
+    // ✅ CORREÇÃO: Background update mais seguro
+    private void scheduleBackgroundCacheUpdate(LocalDate dataInicio, LocalDate dataFim) {
+        CompletableFuture.runAsync(() -> {
+                    try {
+                        updateCacheInBackgroundEncrypted(dataInicio, dataFim);
+                    } catch (Exception e) {
+                        log.error("Erro na atualização em background: {}", e.getMessage());
+                    }
+                }).orTimeout(5, TimeUnit.MINUTES)
+                .exceptionally(throwable -> {
+                    log.error("Timeout ou erro na atualização em background: {}", throwable.getMessage());
+                    return null;
+                });
     }
 
     private PageDTO<VehicleDTO> getFromDatabaseDecrypted(
@@ -123,7 +164,7 @@ public class VehicleApiService {
                     CacheUpdateContext context = CacheUpdateContext.filteredSearch(
                             searchStart, searchEnd, credor, contrato, protocolo, cpf
                     );
-                    vehicleCacheService.updateCache(vehiclesEncrypted, context);
+                    vehicleCacheService.updateCacheThreadSafe(vehiclesEncrypted, context);
                     log.info("Cache atualizado com dados criptografados");
 
                     return getFromDatabaseDecrypted(dataInicio, dataFim, credor, contrato, protocolo,
@@ -157,8 +198,10 @@ public class VehicleApiService {
 
             if (!vehicles.isEmpty()) {
                 CacheUpdateContext context = CacheUpdateContext.scheduledRefresh(searchStart, searchEnd);
-                vehicleCacheService.updateCacheThreadSafe(vehicles, context);
+                vehicleCacheService.updateCacheThreadSafe(vehicles, context); // ✅ Usando thread-safe
                 log.info("Cache atualizado em background com {} registros criptografados", vehicles.size());
+            } else {
+                log.info("Atualização em background: API retornou vazio");
             }
 
         } catch (Exception e) {
@@ -206,9 +249,21 @@ public class VehicleApiService {
                 throwable.getMessage());
 
         try {
-            return getFromDatabaseDecrypted(dataInicio, dataFim, credor, contrato, protocolo,
+            PageDTO<VehicleDTO> result = getFromDatabaseDecrypted(dataInicio, dataFim, credor, contrato, protocolo,
                     cpf, uf, cidade, modelo, placa, etapaAtual, statusApreensao,
                     page, size, sortBy, sortDir);
+
+            if (result.content().isEmpty() && dataInicio != null) {
+                log.info("Fallback: expandindo período de busca no cache");
+                LocalDate expandedStart = dataInicio.minusDays(30);
+                LocalDate expandedEnd = dataFim != null ? dataFim.plusDays(7) : LocalDate.now().plusDays(7);
+
+                result = getFromDatabaseDecrypted(expandedStart, expandedEnd, credor, contrato, protocolo,
+                        cpf, uf, cidade, modelo, placa, etapaAtual, statusApreensao,
+                        page, size, sortBy, sortDir);
+            }
+
+            return result;
         } catch (Exception e) {
             log.error("Falha ao buscar do banco no fallback: {}", e.getMessage());
             return PageDTO.of(List.of(), page, size, 0);
@@ -275,7 +330,7 @@ public class VehicleApiService {
 
             if (!vehicles.isEmpty()) {
                 CacheUpdateContext context = CacheUpdateContext.fullRefresh();
-                vehicleCacheService.updateCache(vehicles, context);
+                vehicleCacheService.updateCacheThreadSafe(vehicles, context);
                 log.info("Cache forçadamente atualizado - {} registros", vehicles.size());
             }
 

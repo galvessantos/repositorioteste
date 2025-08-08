@@ -29,11 +29,11 @@ public class VehicleInquiryMapper {
     }
 
     public List<VehicleDTO> mapToVeiculoDTO(List<ConsultaNotificationResponseDTO.NotificationData> notifications) {
-        return mapToVeiculoDTO(notifications, true); // Para cache - criptografar
+        return mapToVeiculoDTO(notifications, true);
     }
 
     public List<VehicleDTO> mapToVeiculoDTOForResponse(List<ConsultaNotificationResponseDTO.NotificationData> notifications) {
-        return mapToVeiculoDTO(notifications, false); // Para resposta API - não criptografar
+        return mapToVeiculoDTO(notifications, false);
     }
 
     private List<VehicleDTO> mapToVeiculoDTO(List<ConsultaNotificationResponseDTO.NotificationData> notifications, boolean shouldEncrypt) {
@@ -124,66 +124,200 @@ public class VehicleInquiryMapper {
     private VehicleDTO selectMostRecentVehicle(VehicleDTO existing, VehicleDTO novo) {
         logger.debug("Realizando merge de veículos duplicados");
 
-        if (novo.ultimaMovimentacao() != null && existing.ultimaMovimentacao() != null) {
-            VehicleDTO selected = novo.ultimaMovimentacao().isAfter(existing.ultimaMovimentacao()) ? novo : existing;
-            logger.debug("Merge baseado em ultimaMovimentacao: {} vs {} -> selecionado registro com data {}",
-                    novo.ultimaMovimentacao(), existing.ultimaMovimentacao(),
-                    selected.ultimaMovimentacao());
+        if (existing == null) {
+            return novo;
+        }
+        if (novo == null) {
+            return existing;
+        }
+
+        VehicleDTO selected = selectByMovementDate(existing, novo);
+        if (selected != null) {
             return mergeVehicleData(existing, novo, selected);
         }
 
-        if (novo.ultimaMovimentacao() != null) {
+        selected = selectByRequestDate(existing, novo);
+        if (selected != null) {
+            return mergeVehicleData(existing, novo, selected);
+        }
+
+        selected = selectByDataCompleteness(existing, novo);
+        return mergeVehicleData(existing, novo, selected);
+    }
+
+    private VehicleDTO selectByMovementDate(VehicleDTO existing, VehicleDTO novo) {
+        LocalDate existingMovement = existing.ultimaMovimentacao();
+        LocalDate novoMovement = novo.ultimaMovimentacao();
+
+        if (existingMovement != null && novoMovement != null) {
+            if (existingMovement.isEqual(novoMovement)) {
+                return selectByDataCompleteness(existing, novo);
+            }
+            VehicleDTO selected = novoMovement.isAfter(existingMovement) ? novo : existing;
+            logger.debug("Merge baseado em ultimaMovimentacao: {} vs {} -> selecionado {}",
+                    novoMovement, existingMovement,
+                    selected == novo ? "novo" : "existing");
+            return selected;
+        }
+
+        if (novoMovement != null) {
             logger.debug("Merge: novo registro tem ultimaMovimentacao, existing não");
-            return mergeVehicleData(existing, novo, novo);
+            return novo;
         }
-        if (existing.ultimaMovimentacao() != null) {
+        if (existingMovement != null) {
             logger.debug("Merge: existing tem ultimaMovimentacao, novo não");
-            return mergeVehicleData(existing, novo, existing);
+            return existing;
         }
 
-        if (novo.dataPedido() != null && existing.dataPedido() != null) {
-            VehicleDTO selected = novo.dataPedido().isAfter(existing.dataPedido()) ? novo : existing;
-            logger.debug("Merge baseado em dataPedido: {} vs {} -> selecionado registro com data {}",
-                    novo.dataPedido(), existing.dataPedido(), selected.dataPedido());
-            return mergeVehicleData(existing, novo, selected);
+        return null;
+    }
+
+    private VehicleDTO selectByRequestDate(VehicleDTO existing, VehicleDTO novo) {
+        LocalDate existingRequest = existing.dataPedido();
+        LocalDate novoRequest = novo.dataPedido();
+
+        if (existingRequest != null && novoRequest != null) {
+            if (existingRequest.isEqual(novoRequest)) {
+                return selectByDataCompleteness(existing, novo);
+            }
+            VehicleDTO selected = novoRequest.isAfter(existingRequest) ? novo : existing;
+            logger.debug("Merge baseado em dataPedido: {} vs {} -> selecionado {}",
+                    novoRequest, existingRequest,
+                    selected == novo ? "novo" : "existing");
+            return selected;
         }
 
-        if (novo.dataPedido() != null) {
+        if (novoRequest != null) {
             logger.debug("Merge: novo registro tem dataPedido, existing não");
-            return mergeVehicleData(existing, novo, novo);
+            return novo;
         }
-        if (existing.dataPedido() != null) {
+        if (existingRequest != null) {
             logger.debug("Merge: existing tem dataPedido, novo não");
-            return mergeVehicleData(existing, novo, existing);
+            return existing;
         }
 
-        logger.debug("Merge: sem datas para comparar, mantendo novo registro");
-        return mergeVehicleData(existing, novo, novo);
+        return null;
+    }
+
+    private VehicleDTO selectByDataCompleteness(VehicleDTO existing, VehicleDTO novo) {
+        int existingScore = calculateCompletenessScore(existing);
+        int novoScore = calculateCompletenessScore(novo);
+
+        logger.debug("Score de completude - existing: {}, novo: {}", existingScore, novoScore);
+
+        if (novoScore > existingScore) {
+            logger.debug("Merge: novo registro tem mais dados completos");
+            return novo;
+        } else if (existingScore > novoScore) {
+            logger.debug("Merge: existing tem mais dados completos");
+            return existing;
+        } else {
+            logger.debug("Merge: empate na completude, mantendo novo registro");
+            return novo;
+        }
+    }
+
+    private int calculateCompletenessScore(VehicleDTO vehicle) {
+        int score = 0;
+
+        if (isValueValid(vehicle.contrato())) score += 3;
+        if (isValueValid(vehicle.placa())) score += 3;
+        if (isValueValid(vehicle.protocolo())) score += 2;
+        if (vehicle.dataPedido() != null) score += 2;
+        if (vehicle.ultimaMovimentacao() != null) score += 2;
+
+        if (isValueValid(vehicle.credor())) score += 1;
+        if (isValueValid(vehicle.modelo())) score += 1;
+        if (isValueValid(vehicle.uf())) score += 1;
+        if (isValueValid(vehicle.cidade())) score += 1;
+        if (isValueValid(vehicle.cpfDevedor())) score += 1;
+        if (isValueValid(vehicle.etapaAtual())) score += 1;
+        if (isValueValid(vehicle.statusApreensao())) score += 1;
+
+        return score;
     }
 
     private VehicleDTO mergeVehicleData(VehicleDTO existing, VehicleDTO novo, VehicleDTO base) {
+        if (base == null) {
+            logger.warn("Base para merge é null, retornando novo");
+            return novo;
+        }
+
         VehicleDTO other = (base == novo) ? existing : novo;
 
         return new VehicleDTO(
-                base.id() != null ? base.id() : other.id(),
-                isValueValid(base.credor()) ? base.credor() : other.credor(),
-                base.dataPedido() != null ? base.dataPedido() : other.dataPedido(),
-                isValueValid(base.contrato()) ? base.contrato() : other.contrato(),
-                isValueValid(base.placa()) ? base.placa() : other.placa(),
-                isValueValid(base.modelo()) ? base.modelo() : other.modelo(),
-                isValueValid(base.uf()) ? base.uf() : other.uf(),
-                isValueValid(base.cidade()) ? base.cidade() : other.cidade(),
-                isValueValid(base.cpfDevedor()) ? base.cpfDevedor() : other.cpfDevedor(),
-                isValueValid(base.protocolo()) ? base.protocolo() : other.protocolo(),
-                isValueValid(base.etapaAtual()) ? base.etapaAtual() : other.etapaAtual(),
-                isValueValid(base.statusApreensao()) ? base.statusApreensao() : other.statusApreensao(),
-                base.ultimaMovimentacao() != null ? base.ultimaMovimentacao() : other.ultimaMovimentacao()
+                mergeField(base.id(), other.id()),
+                mergeStringField(base.credor(), other.credor()),
+                mergeField(base.dataPedido(), other.dataPedido()),
+                mergeStringField(base.contrato(), other.contrato()),
+                mergeStringField(base.placa(), other.placa()),
+                mergeStringField(base.modelo(), other.modelo()),
+                mergeStringField(base.uf(), other.uf()),
+                mergeStringField(base.cidade(), other.cidade()),
+                mergeStringField(base.cpfDevedor(), other.cpfDevedor()),
+                mergeStringField(base.protocolo(), other.protocolo()),
+                mergeStringField(base.etapaAtual(), other.etapaAtual()),
+                mergeStringField(base.statusApreensao(), other.statusApreensao()),
+                mergeField(base.ultimaMovimentacao(), other.ultimaMovimentacao())
         );
     }
 
-    private boolean isValueValid(String value) {
-        return value != null && !value.trim().isEmpty() && !"N/A".equals(value);
+    private String mergeStringField(String baseValue, String otherValue) {
+        if (isValueValid(baseValue)) {
+            return baseValue;
+        }
+
+        if (isValueValid(otherValue)) {
+            return otherValue;
+        }
+
+        if (baseValue != null) {
+            return baseValue;
+        }
+
+        return otherValue;
     }
+
+    private <T> T mergeField(T baseValue, T otherValue) {
+        if (baseValue != null) {
+            return baseValue;
+        }
+        return otherValue;
+    }
+
+    private boolean isValueValid(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return false;
+        }
+
+        String trimmed = value.trim();
+
+        return !("N/A".equalsIgnoreCase(trimmed) || "null".equalsIgnoreCase(trimmed) || "undefined".equalsIgnoreCase(trimmed) || "-".equals(trimmed));
+    }
+
+    private void logMergeDecision(VehicleDTO existing, VehicleDTO novo, VehicleDTO selected, String reason) {
+        if (logger.isDebugEnabled()) {
+            logger.debug("MERGE DECISION:");
+            logger.debug("  Existing: contrato={}, placa={}, ultimaMov={}",
+                    maskSensitiveData(existing.contrato()),
+                    maskSensitiveData(existing.placa()),
+                    existing.ultimaMovimentacao());
+            logger.debug("  Novo:     contrato={}, placa={}, ultimaMov={}",
+                    maskSensitiveData(novo.contrato()),
+                    maskSensitiveData(novo.placa()),
+                    novo.ultimaMovimentacao());
+            logger.debug("  Selected: {} (razão: {})",
+                    selected == novo ? "NOVO" : "EXISTING", reason);
+        }
+    }
+
+    private String maskSensitiveData(String data) {
+        if (data == null || data.length() <= 4) {
+            return "***";
+        }
+        return data.substring(0, 2) + "***" + data.substring(data.length() - 2);
+    }
+
 
     private VehicleDTO createVeiculoDTOFromNotification(ConsultaNotificationResponseDTO.NotificationData notification, boolean shouldEncrypt) {
         try {
