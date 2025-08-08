@@ -126,10 +126,10 @@ public class VehicleController {
 
     @GetMapping("/contract")
     @Operation(summary = "Buscar detalhes de contrato específico")
-    public ResponseEntity<?> getDados(@RequestParam String contrato) {
+    public ResponseEntity<?> getDados(@RequestParam String contrato, @RequestParam String placa) {
         log.info("Buscando contrato: {}", contrato);
         try {
-            QueryDetailResponseDTO resposta = vehicleApiService.searchContract(contrato);
+            QueryDetailResponseDTO resposta = vehicleApiService.searchContract(contrato, placa);
             return ResponseEntity.ok(resposta);
         } catch (Exception e) {
             log.error("Erro ao buscar contrato: {}", e.getMessage());
