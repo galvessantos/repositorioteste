@@ -69,7 +69,7 @@ public class VehicleCache {
     private String statusApreensao;
 
     @Column(name = "ultima_movimentacao")
-    private LocalDate ultimaMovimentacao;
+    private LocalDateTime ultimaMovimentacao;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     @CreationTimestamp

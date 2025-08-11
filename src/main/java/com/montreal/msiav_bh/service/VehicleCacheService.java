@@ -366,6 +366,7 @@ public class VehicleCacheService {
             boolean protocoloChanged = !Objects.equals(normalizeString(existing.getProtocolo()), normalizeString(dto.protocolo()));
             boolean etapaAtualChanged = !Objects.equals(normalizeString(existing.getEtapaAtual()), normalizeString(dto.etapaAtual()));
             boolean statusApreensaoChanged = !Objects.equals(normalizeString(existing.getStatusApreensao()), normalizeString(dto.statusApreensao()));
+
             boolean ultimaMovimentacaoChanged = !Objects.equals(existing.getUltimaMovimentacao(), dto.ultimaMovimentacao());
 
             boolean hasChanges = contratoChanged || placaChanged || credorChanged || dataPedidoChanged ||

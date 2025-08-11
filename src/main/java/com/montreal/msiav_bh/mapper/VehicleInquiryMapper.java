@@ -146,8 +146,8 @@ public class VehicleInquiryMapper {
     }
 
     private VehicleDTO selectByMovementDate(VehicleDTO existing, VehicleDTO novo) {
-        LocalDate existingMovement = existing.ultimaMovimentacao();
-        LocalDate novoMovement = novo.ultimaMovimentacao();
+        LocalDateTime existingMovement = existing.ultimaMovimentacao();
+        LocalDateTime novoMovement = novo.ultimaMovimentacao();
 
         if (existingMovement != null && novoMovement != null) {
             if (existingMovement.isEqual(novoMovement)) {
@@ -318,7 +318,6 @@ public class VehicleInquiryMapper {
         return data.substring(0, 2) + "***" + data.substring(data.length() - 2);
     }
 
-
     private VehicleDTO createVeiculoDTOFromNotification(ConsultaNotificationResponseDTO.NotificationData notification, boolean shouldEncrypt) {
         try {
             String credor = notification.nomeCredor() != null ? notification.nomeCredor() :
@@ -333,14 +332,16 @@ public class VehicleInquiryMapper {
                     (notification.contrato() != null && !notification.contrato().isEmpty() ?
                             notification.contrato().get(0).protocolo() : "N/A");
 
-            LocalDate dataPedido = parseDate(notification.dataPedido());
-            LocalDate dataMovimentacao = parseDate(notification.dataMovimentacao());
+            LocalDateTime dataPedidoDateTime = parseDateTime(notification.dataPedido());
+            LocalDateTime dataMovimentacao = parseDateTime(notification.dataMovimentacao());
 
             if (notification.contrato() != null && !notification.contrato().isEmpty()) {
                 var contratoInfo = notification.contrato().get(0);
-                if (dataPedido == null) dataPedido = contratoInfo.dataPedido();
-                if (dataMovimentacao == null) dataMovimentacao = contratoInfo.dataNotificacao();
+                if (dataPedidoDateTime == null) dataPedidoDateTime = parseContractDate(contratoInfo.dataPedido());
+                if (dataMovimentacao == null) dataMovimentacao = parseContractDate(contratoInfo.dataNotificacao());
             }
+
+            LocalDate dataPedido = dataPedidoDateTime != null ? dataPedidoDateTime.toLocalDate() : null;
 
             String cpfDevedor = notification.devedor() != null && !notification.devedor().isEmpty() ?
                     notification.devedor().get(0).cpfCnpj() : "N/A";
@@ -389,14 +390,16 @@ public class VehicleInquiryMapper {
                     (notification.contrato() != null && !notification.contrato().isEmpty() ?
                             notification.contrato().get(0).protocolo() : "N/A");
 
-            LocalDate dataPedido = parseDate(notification.dataPedido());
-            LocalDate dataMovimentacao = parseDate(notification.dataMovimentacao());
+            LocalDateTime dataPedidoDateTime = parseDateTime(notification.dataPedido());
+            LocalDateTime dataMovimentacao = parseDateTime(notification.dataMovimentacao());
 
             if (notification.contrato() != null && !notification.contrato().isEmpty()) {
                 var contratoInfo = notification.contrato().get(0);
-                if (dataPedido == null) dataPedido = contratoInfo.dataPedido();
-                if (dataMovimentacao == null) dataMovimentacao = contratoInfo.dataNotificacao();
+                if (dataPedidoDateTime == null) dataPedidoDateTime = parseContractDate(contratoInfo.dataPedido());
+                if (dataMovimentacao == null) dataMovimentacao = parseContractDate(contratoInfo.dataNotificacao());
             }
+
+            LocalDate dataPedido = dataPedidoDateTime != null ? dataPedidoDateTime.toLocalDate() : null;
 
             String cpfDevedor = notification.devedor() != null && !notification.devedor().isEmpty() ?
                     notification.devedor().get(0).cpfCnpj() : "N/A";
@@ -470,23 +473,29 @@ public class VehicleInquiryMapper {
         return "N/A";
     }
 
-    private LocalDate parseDate(String dateString) {
+    private LocalDateTime parseDateTime(String dateString) {
         if (dateString == null || dateString.trim().isEmpty()) return null;
 
         try {
-            return LocalDateTime.parse(dateString, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS")).toLocalDate();
+            return LocalDateTime.parse(dateString, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSSSS"));
         } catch (DateTimeParseException e1) {
             try {
-                return LocalDateTime.parse(dateString, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")).toLocalDate();
+                return LocalDateTime.parse(dateString, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
             } catch (DateTimeParseException e2) {
                 try {
-                    return LocalDate.parse(dateString, DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                    LocalDate date = LocalDate.parse(dateString, DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                    return date.atStartOfDay();
                 } catch (DateTimeParseException e3) {
                     logger.debug("Erro ao fazer parse da data: {}", dateString);
                     return null;
                 }
             }
         }
+    }
+
+    private LocalDateTime parseContractDate(LocalDate localDate) {
+        if (localDate == null) return null;
+        return localDate.atStartOfDay();
     }
 
     private String extractCityFromAddress(String address) {

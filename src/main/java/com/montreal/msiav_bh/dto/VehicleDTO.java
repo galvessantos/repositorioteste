@@ -2,6 +2,7 @@ package com.montreal.msiav_bh.dto;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 public record VehicleDTO(
         Long id,
@@ -20,6 +21,6 @@ public record VehicleDTO(
         String etapaAtual,
         String statusApreensao,
 
-        @JsonFormat(pattern = "dd/MM/yyyy")
-        LocalDate ultimaMovimentacao
+        @JsonFormat(pattern = "dd/MM/yyyy HH:mm:ss")
+        LocalDateTime ultimaMovimentacao
 ) {}
