@@ -2,7 +2,12 @@ package com.montreal.msiav_bh.controller;
 
 import com.montreal.msiav_bh.dto.PageDTO;
 import com.montreal.msiav_bh.dto.VehicleDTO;
+import com.montreal.msiav_bh.dto.response.ContractWithAddressDTO;
 import com.montreal.msiav_bh.dto.response.QueryDetailResponseDTO;
+import com.montreal.msiav_bh.entity.Address;
+import com.montreal.msiav_bh.entity.Contract;
+import com.montreal.msiav_bh.service.ApiQueryService;
+import com.montreal.msiav_bh.service.ContractPersistenceService;
 import com.montreal.msiav_bh.service.VehicleApiService;
 import com.montreal.msiav_bh.service.VehicleCacheService;
 import com.montreal.msiav_bh.utils.exceptions.ValidationMessages;
@@ -14,13 +19,17 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.HttpClientErrorException;
 
 import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 @Slf4j
 @RestController
@@ -35,6 +44,9 @@ public class VehicleController {
 
     private final VehicleApiService vehicleApiService;
     private final VehicleCacheService vehicleCacheService;
+    private final ContractPersistenceService persistenceService;
+    @Autowired
+    private ApiQueryService apiQueryService;
 
     @GetMapping
     @Operation(summary = "Buscar veículos (Database-First)")
@@ -124,21 +136,57 @@ public class VehicleController {
         }
     }
 
-    @GetMapping("/contract")
-    @Operation(summary = "Buscar detalhes de contrato específico")
-    public ResponseEntity<?> getDados(@RequestParam String contrato) {
-        log.info("Buscando contrato: {}", contrato);
+
+    @GetMapping("/search")
+    public ResponseEntity<?> searchAndSaveContract(@RequestParam String placa) {
         try {
-            QueryDetailResponseDTO resposta = vehicleApiService.searchContract(contrato);
-            return ResponseEntity.ok(resposta);
+            ContractWithAddressDTO response = apiQueryService.searchContract(placa);
+            return ResponseEntity.ok(response);
+        } catch (HttpClientErrorException.NotFound ex) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("success", false, "message", "Contrato não encontrado"));
         } catch (Exception e) {
-            log.error("Erro ao buscar contrato: {}", e.getMessage());
-            return ResponseEntity.internalServerError().body(Map.of(
-                    "error", "Erro ao buscar contrato",
-                    "message", e.getMessage()
-            ));
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("success", false, "message", "Erro interno ao processar a requisição"));
         }
     }
+
+
+    @GetMapping("/by-plate")
+    public ResponseEntity<Contract> getContractFromDatabase(@RequestParam String placa) {
+        try {
+            Optional<Contract> contract = persistenceService.findContractByPlaca(placa);
+            return contract.map(ResponseEntity::ok)
+                    .orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    @PostMapping("/{licensePlate}/probable-address")
+    public ResponseEntity<Void> saveProbableAddress(
+            @PathVariable String licensePlate,
+            @RequestBody Address address) {
+        apiQueryService.addProbableAddressByPlate(licensePlate, address);
+        return ResponseEntity.ok().build();
+    }
+
+    @PutMapping("/{addressId}/probable-address")
+    public ResponseEntity<Void> updateProbableAddress(
+            @PathVariable Long addressId,
+            @RequestBody Address address) {
+        apiQueryService.updateProbableAddress(addressId, address);
+        return ResponseEntity.ok().build();
+    }
+
+    @DeleteMapping("/{id}/probable-address")
+    public ResponseEntity<Void> deleteProbableAddress(@PathVariable Long id) {
+        apiQueryService.deleteProbableAddress(id);
+        return ResponseEntity.noContent().build();
+    }
+
 
     @GetMapping("/health")
     @Operation(summary = "Verificar saúde da API")
@@ -184,6 +232,4 @@ public class VehicleController {
             ));
         }
     }
-
-
 }

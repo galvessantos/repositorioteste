@@ -12,6 +12,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -41,7 +42,8 @@ class VehicleApiServiceTest {
         VehicleDTO mockVehicle = new VehicleDTO(
                 1L, "Credor Test", dataInicio, "123456", "ABC-1234",
                 "Model X", "SP", "São Paulo", "12345678901",
-                "PROT-123", "Em andamento", "Ativo", dataFim
+                "PROT-123", "Em andamento", "Ativo",
+                LocalDateTime.now()
         );
 
         Page<VehicleDTO> mockPage = new PageImpl<>(List.of(mockVehicle));
@@ -72,7 +74,8 @@ class VehicleApiServiceTest {
         VehicleDTO mockVehicle = new VehicleDTO(
                 2L, "Credor Test 2", dataInicio, "654321", "XYZ-9876",
                 "Model Y", "RJ", "Rio de Janeiro", "98765432100",
-                "PROT-456", "Finalizado", "Recuperado", dataFim
+                "PROT-456", "Finalizado", "Recuperado",
+                LocalDateTime.now().minusHours(2)
         );
 
         VehicleCacheService.CacheStatus mockCacheStatus = mock(VehicleCacheService.CacheStatus.class);
@@ -163,5 +166,41 @@ class VehicleApiServiceTest {
         assertTrue(result.content().isEmpty());
         verify(vehicleCacheService, times(1)).getCacheStatus();
         verify(apiQueryService, times(1)).searchByPeriod(any(), any());
+    }
+
+    @Test
+    void shouldHandleLocalDateTimeInUltimaMovimentacao() {
+        LocalDate dataInicio = LocalDate.now().minusDays(30);
+        LocalDate dataFim = LocalDate.now();
+        LocalDateTime ultimaMovDateTime = LocalDateTime.of(2023, 6, 22, 15, 37, 42);
+
+        VehicleDTO mockVehicle = new VehicleDTO(
+                3L, "Credor Test 3", dataInicio, "789012", "DEF-5678",
+                "Model Z", "MG", "Belo Horizonte", "11122233344",
+                "PROT-789", "Localizado", "Em andamento",
+                ultimaMovDateTime
+        );
+
+        Page<VehicleDTO> mockPage = new PageImpl<>(List.of(mockVehicle));
+        VehicleCacheService.CacheStatus mockCacheStatus = mock(VehicleCacheService.CacheStatus.class);
+
+        when(mockCacheStatus.getTotalRecords()).thenReturn(100L);
+        when(mockCacheStatus.isValid()).thenReturn(true);
+        when(vehicleCacheService.getCacheStatus()).thenReturn(mockCacheStatus);
+        when(vehicleCacheService.getFromCache(any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(), any())).thenReturn(mockPage);
+
+        PageDTO<VehicleDTO> result = vehicleApiService.getVehiclesWithFallback(
+                dataInicio, dataFim, null, null, null, null, null, null,
+                null, null, null, null, 0, 10, "protocolo", "asc"
+        );
+
+        assertNotNull(result);
+        assertEquals(1, result.content().size());
+
+        VehicleDTO resultVehicle = result.content().get(0);
+        assertEquals(ultimaMovDateTime, resultVehicle.ultimaMovimentacao());
+
+        verify(vehicleCacheService, times(1)).getCacheStatus();
     }
 }

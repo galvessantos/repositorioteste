@@ -31,7 +31,7 @@ public class RestTemplateConfig {
 
             RequestConfig requestConfig = RequestConfig.custom()
                     .setConnectionRequestTimeout(Timeout.ofSeconds(10))
-                    .setResponseTimeout(Timeout.ofSeconds(50))
+                    .setResponseTimeout(Timeout.ofSeconds(180))
                     .build();
 
             CloseableHttpClient httpClient = HttpClients.custom()

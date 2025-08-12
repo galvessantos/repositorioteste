@@ -1,9 +1,11 @@
 package com.montreal.msiav_bh.service;
 
 import com.montreal.msiav_bh.context.CacheUpdateContext;
+import com.montreal.msiav_bh.dto.ApiResponseDTO;
 import com.montreal.msiav_bh.dto.PageDTO;
 import com.montreal.msiav_bh.dto.VehicleDTO;
 import com.montreal.msiav_bh.dto.response.ConsultaNotificationResponseDTO;
+import com.montreal.msiav_bh.dto.response.ContractWithAddressDTO;
 import com.montreal.msiav_bh.dto.response.QueryDetailResponseDTO;
 import com.montreal.msiav_bh.mapper.VehicleInquiryMapper;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -340,8 +342,4 @@ public class VehicleApiService {
         }
     }
 
-    public QueryDetailResponseDTO searchContract(String contrato) {
-        log.info("Buscando detalhes do contrato: {}", contrato);
-        return apiQueryService.searchContract(contrato);
-    }
 }
