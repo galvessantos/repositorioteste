@@ -1,4 +1,4 @@
-# Solução para Duplicatas em Dados Criptografados
+# Solução Simplificada para Duplicatas em Dados Criptografados
 
 ## Problema
 
@@ -13,92 +13,82 @@ Ambos representam o mesmo contrato, mas têm valores criptografados diferentes.
 
 ## Solução Implementada
 
-### 1. Tabela de Índices Únicos
+### 1. Colunas de Hash na Tabela Existente
 
-Criamos uma nova tabela `vehicle_cache_unique_index` que armazena hashes SHA-256 dos valores descriptografados:
+Adicionamos 3 colunas na tabela `vehicle_cache` existente para armazenar hashes SHA-256 dos valores descriptografados:
 
 ```sql
-CREATE TABLE vehicle_cache_unique_index (
-    id BIGSERIAL PRIMARY KEY,
-    vehicle_cache_id BIGINT NOT NULL UNIQUE,
-    contrato_hash VARCHAR(64),
-    placa_hash VARCHAR(64),
-    contrato_placa_hash VARCHAR(64),
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+ALTER TABLE vehicle_cache ADD COLUMN contrato_hash VARCHAR(64);
+ALTER TABLE vehicle_cache ADD COLUMN placa_hash VARCHAR(64);
+ALTER TABLE vehicle_cache ADD COLUMN contrato_placa_hash VARCHAR(64);
+
+-- Constraints únicas para prevenir duplicatas
+ALTER TABLE vehicle_cache ADD CONSTRAINT unique_contrato_hash UNIQUE (contrato_hash);
+ALTER TABLE vehicle_cache ADD CONSTRAINT unique_placa_hash UNIQUE (placa_hash);
+ALTER TABLE vehicle_cache ADD CONSTRAINT unique_contrato_placa_hash UNIQUE (contrato_placa_hash);
 ```
 
 ### 2. Processo de Detecção de Duplicatas
 
-1. **Antes de inserir**: O sistema descriptografa os valores, gera hashes SHA-256 e verifica se já existem na tabela de índices
-2. **Durante a inserção**: Se não houver duplicata, cria o registro e seu índice único correspondente
-3. **Durante a atualização**: Verifica e cria índice se necessário
+1. **Antes de inserir**: O sistema descriptografa os valores, gera hashes SHA-256 e verifica se já existem no banco
+2. **Durante a inserção**: Se não houver duplicata, salva o registro com os hashes preenchidos
+3. **Dados existentes**: Um job popula automaticamente os hashes em registros antigos após o deploy
 
-### 3. Componentes Implementados
+### 3. Implementação Simples
 
-#### Entidades
-- `VehicleCacheUniqueIndex`: Entidade JPA para a tabela de índices únicos
-
-#### Repositórios
-- `VehicleCacheUniqueIndexRepository`: Repositório para gerenciar índices únicos
-
-#### Serviços Atualizados
-- `VehicleCacheService`: 
-  - `findExistingVehicleOptimized()`: Busca por duplicatas usando índices únicos
-  - `createUniqueIndexesForExistingData()`: Cria índices para dados existentes
-  - `removeDuplicateVehicles()`: Remove veículos duplicados mantendo o mais recente
-
-#### Controller Administrativo
-- `VehicleCacheAdminController`: Endpoints para gerenciar índices e duplicatas
+- Modificamos apenas a entidade `VehicleCache` e o serviço `VehicleCacheService`
+- Nenhuma tabela adicional foi criada
+- Nenhum endpoint administrativo foi necessário
+- O sistema funciona automaticamente após aplicar a migration
 
 ## Como Usar
 
 ### 1. Aplicar a Migration
 
-Execute o script SQL para criar a tabela de índices únicos:
+Execute o script SQL para adicionar as colunas:
 ```bash
 flyway migrate
 ```
 
-### 2. Limpar Duplicatas Existentes
+### 2. Deploy da Aplicação
 
-Via API (requer role ADMIN):
-```bash
-# Remover duplicatas e criar índices
-curl -X POST http://localhost:8080/api/v1/admin/vehicle-cache/cleanup-and-reindex \
-  -H "Authorization: Bearer {token}"
+Ao iniciar, a aplicação automaticamente:
+- Detecta registros sem hashes
+- Popula os hashes para registros existentes
+- Remove duplicatas em um job agendado (1:30 AM diariamente)
+
+### 3. Monitoramento
+
+O sistema agora previne duplicatas automaticamente. Os logs mostram:
 ```
-
-### 3. Monitorar o Sistema
-
-O job automático agora:
-- Detecta duplicatas antes de inserir
-- Usa índices únicos para busca eficiente
-- Mantém integridade dos dados
+➕ NOVO veículo inserido: contrato=***, placa=***
+✓ Veículo ATUALIZADO: contrato=***, placa=***
+```
 
 ## Benefícios
 
-1. **Prevenção de Duplicatas**: Impossível inserir registros com mesmo contrato/placa
-2. **Performance**: Busca por hash é mais rápida que descriptografar todos os registros
-3. **Integridade**: Constraints únicas garantem consistência dos dados
-4. **Migração Suave**: Sistema funciona com dados existentes
+1. **Simplicidade**: Solução minimalista sem complexidade adicional
+2. **Performance**: Busca por hash é O(1) com índices únicos
+3. **Integridade**: Constraints no banco garantem zero duplicatas
+4. **Transparência**: Funciona automaticamente sem intervenção manual
 
 ## Manutenção
 
-### Verificar Status
-```bash
-curl http://localhost:8080/api/v1/admin/vehicle-cache/status \
-  -H "Authorization: Bearer {token}"
-```
+### Verificar Duplicatas
+```sql
+-- Contar registros sem hashes (deveria ser 0 após migração)
+SELECT COUNT(*) FROM vehicle_cache 
+WHERE contrato_hash IS NULL OR placa_hash IS NULL;
 
-### Recriar Índices (se necessário)
-```bash
-curl -X POST http://localhost:8080/api/v1/admin/vehicle-cache/create-unique-indexes \
-  -H "Authorization: Bearer {token}"
+-- Verificar possíveis duplicatas por contrato descriptografado
+SELECT COUNT(*), contrato_hash 
+FROM vehicle_cache 
+GROUP BY contrato_hash 
+HAVING COUNT(*) > 1;
 ```
 
 ## Considerações de Segurança
 
-- Os hashes SHA-256 não comprometem a segurança dos dados originais
-- A tabela de índices contém apenas hashes, não dados sensíveis
-- O acesso aos endpoints administrativos requer role ADMIN
+- Os hashes SHA-256 são unidirecionais - não é possível recuperar o valor original
+- Os dados sensíveis continuam criptografados nas colunas originais
+- Apenas os hashes são usados para detecção de duplicatas
