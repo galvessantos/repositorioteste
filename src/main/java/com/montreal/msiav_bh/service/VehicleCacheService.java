@@ -5,8 +5,10 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.montreal.msiav_bh.context.CacheUpdateContext;
 import com.montreal.msiav_bh.dto.VehicleDTO;
 import com.montreal.msiav_bh.entity.VehicleCache;
+import com.montreal.msiav_bh.entity.VehicleCacheUniqueIndex;
 import com.montreal.msiav_bh.mapper.VehicleCacheMapper;
 import com.montreal.msiav_bh.repository.VehicleCacheRepository;
+import com.montreal.msiav_bh.repository.VehicleCacheUniqueIndexRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +19,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -31,6 +36,7 @@ import java.util.stream.Collectors;
 public class VehicleCacheService {
 
     private final VehicleCacheRepository vehicleCacheRepository;
+    private final VehicleCacheUniqueIndexRepository uniqueIndexRepository;
     private final VehicleCacheMapper vehicleCacheMapper;
     private final VehicleCacheCryptoService cryptoService;
 
@@ -230,6 +236,16 @@ public class VehicleCacheService {
                         vehicleCacheRepository.save(updatedEntity);
                         updated++;
 
+                        // Atualizar índice único se necessário
+                        Optional<VehicleCacheUniqueIndex> existingIndex = uniqueIndexRepository.findByVehicleCacheId(existingEntity.getId());
+                        if (existingIndex.isEmpty()) {
+                            // Se não existe índice, criar um novo
+                            String contratoDecrypted = cryptoService.decryptContrato(dto.contrato());
+                            String placaDecrypted = cryptoService.decryptPlaca(dto.placa());
+                            VehicleCacheUniqueIndex uniqueIndex = createUniqueIndex(existingEntity.getId(), contratoDecrypted, placaDecrypted);
+                            uniqueIndexRepository.save(uniqueIndex);
+                        }
+
                         updateInMemoryCache(dto, existingEntity.getId());
 
                         log.debug("✓ Veículo ATUALIZADO: contrato={}, placa={}",
@@ -245,6 +261,12 @@ public class VehicleCacheService {
                     VehicleCache newEntity = vehicleCacheMapper.toEntity(dto, syncDate);
                     VehicleCache savedEntity = vehicleCacheRepository.save(newEntity);
                     inserted++;
+
+                    // Criar índice único para o novo veículo
+                    String contratoDecrypted = cryptoService.decryptContrato(dto.contrato());
+                    String placaDecrypted = cryptoService.decryptPlaca(dto.placa());
+                    VehicleCacheUniqueIndex uniqueIndex = createUniqueIndex(savedEntity.getId(), contratoDecrypted, placaDecrypted);
+                    uniqueIndexRepository.save(uniqueIndex);
 
                     updateInMemoryCache(dto, savedEntity.getId());
 
@@ -273,7 +295,25 @@ public class VehicleCacheService {
     }
 
     private Optional<VehicleCache> findExistingVehicleOptimized(VehicleDTO dto) {
+        // Primeiro, descriptografa os valores
         String contratoDecrypted = cryptoService.decryptContrato(dto.contrato());
+        String placaDecrypted = cryptoService.decryptPlaca(dto.placa());
+        
+        // Busca por índice único baseado em hash
+        Optional<VehicleCacheUniqueIndex> existingIndex = findExistingUniqueIndex(contratoDecrypted, placaDecrypted);
+        if (existingIndex.isPresent()) {
+            Optional<VehicleCache> vehicle = vehicleCacheRepository.findById(existingIndex.get().getVehicleCacheId());
+            if (vehicle.isPresent()) {
+                log.debug("Veículo encontrado através do índice único - ID: {}", existingIndex.get().getVehicleCacheId());
+                return vehicle;
+            } else {
+                // Se o índice existe mas o veículo não, remove o índice órfão
+                log.warn("Índice único órfão encontrado para vehicleCacheId: {} - removendo", existingIndex.get().getVehicleCacheId());
+                uniqueIndexRepository.delete(existingIndex.get());
+            }
+        }
+        
+        // Fallback para busca no cache em memória (para compatibilidade)
         if (contratoDecrypted != null && !"N/A".equals(contratoDecrypted)) {
             Long vehicleId = contratoToIdCache.getIfPresent(contratoDecrypted.trim());
             if (vehicleId != null) {
@@ -286,7 +326,6 @@ public class VehicleCacheService {
             }
         }
 
-        String placaDecrypted = cryptoService.decryptPlaca(dto.placa());
         if (placaDecrypted != null && !"N/A".equals(placaDecrypted)) {
             Long vehicleId = placaToIdCache.getIfPresent(placaDecrypted.trim().toUpperCase());
             if (vehicleId != null) {
@@ -594,11 +633,21 @@ public class VehicleCacheService {
     public void invalidateCache() {
         log.info("Invalidando todo o cache de veículos");
         long recordsBeforeInvalidation = vehicleCacheRepository.count();
+        long uniqueIndexBeforeInvalidation = uniqueIndexRepository.count();
+        
+        // Remover todos os índices únicos primeiro
+        uniqueIndexRepository.deleteAll();
+        
+        // Remover todos os veículos do cache
         vehicleCacheRepository.deleteAll();
+        
+        // Limpar caches em memória
         contratoToIdCache.invalidateAll();
         placaToIdCache.invalidateAll();
         protocoloToIdCache.invalidateAll();
-        log.info("Cache invalidado com sucesso - {} registros removidos", recordsBeforeInvalidation);
+        
+        log.info("Cache invalidado com sucesso - {} registros de veículos e {} índices únicos removidos", 
+                recordsBeforeInvalidation, uniqueIndexBeforeInvalidation);
     }
 
     public CacheStatus getCacheStatus() {
@@ -626,6 +675,153 @@ public class VehicleCacheService {
                 .message(isValid ? "Cache válido (dados sensíveis protegidos)" :
                         String.format("Cache desatualizado (última sync há %d minutos)", minutesSinceSync))
                 .build();
+    }
+
+    private String generateHash(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(value.trim().toUpperCase().getBytes(StandardCharsets.UTF_8));
+            return bytesToHex(hash);
+        } catch (NoSuchAlgorithmException e) {
+            log.error("Erro ao gerar hash SHA-256", e);
+            throw new RuntimeException("Erro ao gerar hash", e);
+        }
+    }
+
+    private String bytesToHex(byte[] bytes) {
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : bytes) {
+            String hex = Integer.toHexString(0xff & b);
+            if (hex.length() == 1) {
+                hexString.append('0');
+            }
+            hexString.append(hex);
+        }
+        return hexString.toString();
+    }
+
+    private VehicleCacheUniqueIndex createUniqueIndex(Long vehicleCacheId, String contratoDecrypted, String placaDecrypted) {
+        String contratoHash = generateHash(contratoDecrypted);
+        String placaHash = generateHash(placaDecrypted);
+        String contratoPlacaHash = null;
+        
+        if (contratoDecrypted != null && placaDecrypted != null) {
+            contratoPlacaHash = generateHash(contratoDecrypted + "|" + placaDecrypted);
+        }
+        
+        return VehicleCacheUniqueIndex.builder()
+                .vehicleCacheId(vehicleCacheId)
+                .contratoHash(contratoHash)
+                .placaHash(placaHash)
+                .contratoPlacaHash(contratoPlacaHash)
+                .build();
+    }
+
+    private Optional<VehicleCacheUniqueIndex> findExistingUniqueIndex(String contratoDecrypted, String placaDecrypted) {
+        String contratoHash = generateHash(contratoDecrypted);
+        String placaHash = generateHash(placaDecrypted);
+        String contratoPlacaHash = null;
+        
+        if (contratoDecrypted != null && placaDecrypted != null) {
+            contratoPlacaHash = generateHash(contratoDecrypted + "|" + placaDecrypted);
+        }
+        
+        return uniqueIndexRepository.findByAnyHash(contratoHash, placaHash, contratoPlacaHash);
+    }
+
+    @Transactional
+    public void createUniqueIndexesForExistingData() {
+        log.info("Iniciando criação de índices únicos para dados existentes");
+        
+        List<VehicleCache> allVehicles = vehicleCacheRepository.findAll();
+        int created = 0;
+        int skipped = 0;
+        int errors = 0;
+        
+        for (VehicleCache vehicle : allVehicles) {
+            try {
+                // Verificar se já existe índice
+                Optional<VehicleCacheUniqueIndex> existingIndex = uniqueIndexRepository.findByVehicleCacheId(vehicle.getId());
+                if (existingIndex.isPresent()) {
+                    skipped++;
+                    continue;
+                }
+                
+                // Descriptografar dados
+                String contratoDecrypted = cryptoService.decryptContrato(vehicle.getContrato());
+                String placaDecrypted = cryptoService.decryptPlaca(vehicle.getPlaca());
+                
+                // Criar índice único
+                VehicleCacheUniqueIndex uniqueIndex = createUniqueIndex(vehicle.getId(), contratoDecrypted, placaDecrypted);
+                uniqueIndexRepository.save(uniqueIndex);
+                created++;
+                
+            } catch (Exception e) {
+                log.error("Erro ao criar índice único para veículo ID {}: {}", vehicle.getId(), e.getMessage());
+                errors++;
+            }
+        }
+        
+        log.info("Criação de índices únicos concluída - Criados: {}, Ignorados: {}, Erros: {}", 
+                created, skipped, errors);
+    }
+
+    @Transactional
+    public void removeDuplicateVehicles() {
+        log.info("Iniciando remoção de veículos duplicados");
+        
+        Map<String, List<VehicleCache>> vehiclesByHash = new HashMap<>();
+        List<VehicleCache> allVehicles = vehicleCacheRepository.findAll();
+        
+        // Agrupar veículos por hash único
+        for (VehicleCache vehicle : allVehicles) {
+            try {
+                String contratoDecrypted = cryptoService.decryptContrato(vehicle.getContrato());
+                String placaDecrypted = cryptoService.decryptPlaca(vehicle.getPlaca());
+                
+                String uniqueKey = generateHash(contratoDecrypted + "|" + placaDecrypted);
+                vehiclesByHash.computeIfAbsent(uniqueKey, k -> new ArrayList<>()).add(vehicle);
+                
+            } catch (Exception e) {
+                log.error("Erro ao processar veículo ID {} para detecção de duplicatas: {}", 
+                        vehicle.getId(), e.getMessage());
+            }
+        }
+        
+        int duplicatesRemoved = 0;
+        List<Long> idsToRemove = new ArrayList<>();
+        
+        // Identificar e remover duplicatas (manter o mais recente)
+        for (Map.Entry<String, List<VehicleCache>> entry : vehiclesByHash.entrySet()) {
+            List<VehicleCache> duplicates = entry.getValue();
+            
+            if (duplicates.size() > 1) {
+                // Ordenar por ID decrescente (manter o mais recente)
+                duplicates.sort((a, b) -> b.getId().compareTo(a.getId()));
+                
+                // Marcar todos exceto o primeiro para remoção
+                for (int i = 1; i < duplicates.size(); i++) {
+                    idsToRemove.add(duplicates.get(i).getId());
+                    duplicatesRemoved++;
+                }
+            }
+        }
+        
+        if (!idsToRemove.isEmpty()) {
+            // Remover índices únicos primeiro
+            uniqueIndexRepository.deleteByVehicleCacheIds(idsToRemove);
+            
+            // Remover veículos duplicados
+            vehicleCacheRepository.deleteAllById(idsToRemove);
+            
+            log.info("Remoção de duplicatas concluída - {} veículos duplicados removidos", duplicatesRemoved);
+        } else {
+            log.info("Nenhuma duplicata encontrada");
+        }
     }
 
     @lombok.Data
