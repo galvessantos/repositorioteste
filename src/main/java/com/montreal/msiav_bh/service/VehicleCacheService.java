@@ -439,12 +439,24 @@ public class VehicleCacheService {
 
     private boolean isDuplicateConstraintError(Exception e) {
         String message = e.getMessage();
-        return message != null && (
-                message.contains("constraint") ||
-                        message.contains("duplicate") ||
-                        message.contains("unique") ||
-                        message.contains("violates unique constraint")
-        );
+        if (message == null) return false;
+        
+        // Verifica se é erro de constraint única
+        boolean isConstraintError = message.contains("constraint") || 
+                                   message.contains("duplicate") || 
+                                   message.contains("unique") ||
+                                   message.contains("violates unique constraint");
+        
+        // Verifica especificamente nossas constraints de hash
+        boolean isHashConstraint = message.contains("unique_contrato_hash") ||
+                                  message.contains("unique_placa_hash") ||
+                                  message.contains("unique_contrato_placa_hash");
+        
+        if (isConstraintError && isHashConstraint) {
+            log.debug("Registro duplicado detectado pela constraint de hash: {}", message);
+        }
+        
+        return isConstraintError;
     }
 
     private VehicleCache updateExistingVehicle(VehicleCache existing, VehicleDTO dto, LocalDateTime syncDate) {
