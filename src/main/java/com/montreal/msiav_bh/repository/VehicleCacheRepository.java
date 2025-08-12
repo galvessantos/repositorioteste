@@ -27,6 +27,16 @@ public interface VehicleCacheRepository extends JpaRepository<VehicleCache, Long
 
     Optional<VehicleCache> findByContratoAndPlaca(String contrato, String placa);
 
+    Optional<VehicleCache> findByContratoHash(String contratoHash);
+
+    Optional<VehicleCache> findByPlacaHash(String placaHash);
+
+    Optional<VehicleCache> findByContratoPlacaHash(String contratoPlacaHash);
+
+    long countByContratoHashIsNotNullAndPlacaHashIsNotNull();
+
+    List<VehicleCache> findByContratoHashIsNullOrPlacaHashIsNull();
+
     List<VehicleCache> findByContratoIsNotNull();
 
     List<VehicleCache> findByPlacaIsNotNull();

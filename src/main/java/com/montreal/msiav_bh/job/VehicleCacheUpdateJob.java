@@ -6,6 +6,7 @@ import com.montreal.msiav_bh.dto.response.ConsultaNotificationResponseDTO;
 import com.montreal.msiav_bh.mapper.VehicleInquiryMapper;
 import com.montreal.msiav_bh.service.ApiQueryService;
 import com.montreal.msiav_bh.service.VehicleCacheService;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -287,13 +288,32 @@ public class VehicleCacheUpdateJob {
             log.info("Horário: {}", LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")));
 
             try {
-                vehicleCacheService.cleanDuplicates();
+                vehicleCacheService.removeDuplicateVehicles();
                 log.info("Limpeza de duplicatas concluída com sucesso");
             } catch (Exception e) {
                 log.error("Falha na limpeza de duplicatas", e);
             }
         } finally {
             jobLock.unlock();
+        }
+    }
+    
+    // Método para ser executado uma única vez após deploy para popular hashes existentes
+    @PostConstruct
+    public void populateHashesIfNeeded() {
+        log.info("Verificando se é necessário popular hashes em registros existentes...");
+        
+        try {
+            long totalRecords = vehicleCacheService.countRecordsWithoutHashes();
+            if (totalRecords > 0) {
+                log.info("Encontrados {} registros sem hashes. Iniciando população...", totalRecords);
+                vehicleCacheService.populateHashesForExistingRecords();
+                log.info("População de hashes concluída");
+            } else {
+                log.info("Todos os registros já possuem hashes");
+            }
+        } catch (Exception e) {
+            log.error("Erro ao popular hashes: {}", e.getMessage(), e);
         }
     }
 }
