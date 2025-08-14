@@ -17,6 +17,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -227,6 +230,17 @@ public class VehicleCacheService {
 
                     if (hasDataChanges(existingEntity, dto)) {
                         VehicleCache updatedEntity = updateExistingVehicle(existingEntity, dto, syncDate);
+
+                        if (updatedEntity.getContratoHash() == null || updatedEntity.getPlacaHash() == null) {
+                            String contratoDecrypted = cryptoService.decryptContrato(dto.contrato());
+                            String placaDecrypted = cryptoService.decryptPlaca(dto.placa());
+                            updatedEntity.setContratoHash(generateHash(contratoDecrypted));
+                            updatedEntity.setPlacaHash(generateHash(placaDecrypted));
+                            if (contratoDecrypted != null && placaDecrypted != null) {
+                                updatedEntity.setContratoPlacaHash(generateHash(contratoDecrypted + "|" + placaDecrypted));
+                            }
+                        }
+
                         vehicleCacheRepository.save(updatedEntity);
                         updated++;
 
@@ -243,6 +257,14 @@ public class VehicleCacheService {
                     }
                 } else {
                     VehicleCache newEntity = vehicleCacheMapper.toEntity(dto, syncDate);
+                    String contratoDecrypted = cryptoService.decryptContrato(dto.contrato());
+                    String placaDecrypted = cryptoService.decryptPlaca(dto.placa());
+                    newEntity.setContratoHash(generateHash(contratoDecrypted));
+                    newEntity.setPlacaHash(generateHash(placaDecrypted));
+                    if (contratoDecrypted != null && placaDecrypted != null) {
+                        newEntity.setContratoPlacaHash(generateHash(contratoDecrypted + "|" + placaDecrypted));
+                    }
+
                     VehicleCache savedEntity = vehicleCacheRepository.save(newEntity);
                     inserted++;
 
@@ -274,40 +296,44 @@ public class VehicleCacheService {
 
     private Optional<VehicleCache> findExistingVehicleOptimized(VehicleDTO dto) {
         String contratoDecrypted = cryptoService.decryptContrato(dto.contrato());
-        if (contratoDecrypted != null && !"N/A".equals(contratoDecrypted)) {
-            Long vehicleId = contratoToIdCache.getIfPresent(contratoDecrypted.trim());
-            if (vehicleId != null) {
-                Optional<VehicleCache> vehicle = vehicleCacheRepository.findById(vehicleId);
-                if (vehicle.isPresent()) {
-                    log.debug("Veículo encontrado por contrato no cache em memória");
-                    return vehicle;
-                }
-                contratoToIdCache.invalidate(contratoDecrypted.trim());
+        String placaDecrypted = cryptoService.decryptPlaca(dto.placa());
+        String contratoHash = generateHash(contratoDecrypted);
+        String placaHash = generateHash(placaDecrypted);
+        String contratoPlacaHash = null;
+
+        if (contratoDecrypted != null && placaDecrypted != null) {
+            contratoPlacaHash = generateHash(contratoDecrypted + "|" + placaDecrypted);
+        }
+
+        if (contratoPlacaHash != null) {
+            Optional<VehicleCache> byContratoPlaca = vehicleCacheRepository.findByContratoPlacaHash(contratoPlacaHash);
+            if (byContratoPlaca.isPresent()) {
+                log.debug("Veículo encontrado por hash contrato+placa");
+                return byContratoPlaca;
             }
         }
 
-        String placaDecrypted = cryptoService.decryptPlaca(dto.placa());
-        if (placaDecrypted != null && !"N/A".equals(placaDecrypted)) {
-            Long vehicleId = placaToIdCache.getIfPresent(placaDecrypted.trim().toUpperCase());
-            if (vehicleId != null) {
-                Optional<VehicleCache> vehicle = vehicleCacheRepository.findById(vehicleId);
-                if (vehicle.isPresent()) {
-                    log.debug("Veículo encontrado por placa no cache em memória");
-                    return vehicle;
-                }
-                placaToIdCache.invalidate(placaDecrypted.trim().toUpperCase());
+        if (contratoHash != null) {
+            Optional<VehicleCache> byContrato = vehicleCacheRepository.findByContratoHash(contratoHash);
+            if (byContrato.isPresent()) {
+                log.debug("Veículo encontrado por hash do contrato");
+                return byContrato;
+            }
+        }
+
+        if (placaHash != null) {
+            Optional<VehicleCache> byPlaca = vehicleCacheRepository.findByPlacaHash(placaHash);
+            if (byPlaca.isPresent()) {
+                log.debug("Veículo encontrado por hash da placa");
+                return byPlaca;
             }
         }
 
         if (dto.protocolo() != null && !"N/A".equals(dto.protocolo())) {
-            Long vehicleId = protocoloToIdCache.getIfPresent(dto.protocolo().trim());
-            if (vehicleId != null) {
-                Optional<VehicleCache> vehicle = vehicleCacheRepository.findById(vehicleId);
-                if (vehicle.isPresent()) {
-                    log.debug("Veículo encontrado por protocolo no cache em memória");
-                    return vehicle;
-                }
-                protocoloToIdCache.invalidate(dto.protocolo().trim());
+            Optional<VehicleCache> byProtocolo = vehicleCacheRepository.findByProtocolo(dto.protocolo());
+            if (byProtocolo.isPresent()) {
+                log.debug("Veículo encontrado por protocolo");
+                return byProtocolo;
             }
         }
 
@@ -405,12 +431,22 @@ public class VehicleCacheService {
 
     private boolean isDuplicateConstraintError(Exception e) {
         String message = e.getMessage();
-        return message != null && (
-                message.contains("constraint") ||
-                        message.contains("duplicate") ||
-                        message.contains("unique") ||
-                        message.contains("violates unique constraint")
-        );
+        if (message == null) return false;
+
+        boolean isConstraintError = message.contains("constraint") ||
+                message.contains("duplicate") ||
+                message.contains("unique") ||
+                message.contains("violates unique constraint");
+
+        boolean isHashConstraint = message.contains("unique_contrato_hash") ||
+                message.contains("unique_placa_hash") ||
+                message.contains("unique_contrato_placa_hash");
+
+        if (isConstraintError && isHashConstraint) {
+            log.debug("Registro duplicado detectado pela constraint de hash: {}", message);
+        }
+
+        return isConstraintError;
     }
 
     private VehicleCache updateExistingVehicle(VehicleCache existing, VehicleDTO dto, LocalDateTime syncDate) {
@@ -594,11 +630,15 @@ public class VehicleCacheService {
     public void invalidateCache() {
         log.info("Invalidando todo o cache de veículos");
         long recordsBeforeInvalidation = vehicleCacheRepository.count();
+
+
         vehicleCacheRepository.deleteAll();
         contratoToIdCache.invalidateAll();
         placaToIdCache.invalidateAll();
         protocoloToIdCache.invalidateAll();
-        log.info("Cache invalidado com sucesso - {} registros removidos", recordsBeforeInvalidation);
+
+        log.info("Cache invalidado com sucesso - {} registros de veículos removidos",
+                recordsBeforeInvalidation);
     }
 
     public CacheStatus getCacheStatus() {
@@ -626,6 +666,119 @@ public class VehicleCacheService {
                 .message(isValid ? "Cache válido (dados sensíveis protegidos)" :
                         String.format("Cache desatualizado (última sync há %d minutos)", minutesSinceSync))
                 .build();
+    }
+
+    private String generateHash(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(value.trim().toUpperCase().getBytes(StandardCharsets.UTF_8));
+            return bytesToHex(hash);
+        } catch (NoSuchAlgorithmException e) {
+            log.error("Erro ao gerar hash SHA-256", e);
+            throw new RuntimeException("Erro ao gerar hash", e);
+        }
+    }
+
+    private String bytesToHex(byte[] bytes) {
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : bytes) {
+            String hex = Integer.toHexString(0xff & b);
+            if (hex.length() == 1) {
+                hexString.append('0');
+            }
+            hexString.append(hex);
+        }
+        return hexString.toString();
+    }
+
+    public long countRecordsWithoutHashes() {
+        return vehicleCacheRepository.count() - vehicleCacheRepository.countByContratoHashIsNotNullAndPlacaHashIsNotNull();
+    }
+
+    @Transactional
+    public void populateHashesForExistingRecords() {
+        log.info("Iniciando população de hashes para registros existentes");
+
+        List<VehicleCache> recordsWithoutHashes = vehicleCacheRepository.findByContratoHashIsNullOrPlacaHashIsNull();
+        int updated = 0;
+        int errors = 0;
+
+        for (VehicleCache vehicle : recordsWithoutHashes) {
+            try {
+                String contratoDecrypted = cryptoService.decryptContrato(vehicle.getContrato());
+                String placaDecrypted = cryptoService.decryptPlaca(vehicle.getPlaca());
+
+                vehicle.setContratoHash(generateHash(contratoDecrypted));
+                vehicle.setPlacaHash(generateHash(placaDecrypted));
+
+                if (contratoDecrypted != null && placaDecrypted != null) {
+                    vehicle.setContratoPlacaHash(generateHash(contratoDecrypted + "|" + placaDecrypted));
+                }
+
+                vehicleCacheRepository.save(vehicle);
+                updated++;
+
+                if (updated % 100 == 0) {
+                    log.info("Progresso: {} registros atualizados", updated);
+                }
+
+            } catch (Exception e) {
+                log.error("Erro ao popular hash para veículo ID {}: {}", vehicle.getId(), e.getMessage());
+                errors++;
+            }
+        }
+
+        log.info("População de hashes concluída - Atualizados: {}, Erros: {}", updated, errors);
+    }
+
+    @Transactional
+    public void removeDuplicateVehicles() {
+        log.info("Iniciando remoção de veículos duplicados");
+
+        Map<String, List<VehicleCache>> vehiclesByHash = new HashMap<>();
+        List<VehicleCache> allVehicles = vehicleCacheRepository.findAll();
+
+        for (VehicleCache vehicle : allVehicles) {
+            try {
+                String contratoDecrypted = cryptoService.decryptContrato(vehicle.getContrato());
+                String placaDecrypted = cryptoService.decryptPlaca(vehicle.getPlaca());
+
+                String uniqueKey = generateHash(contratoDecrypted + "|" + placaDecrypted);
+                vehiclesByHash.computeIfAbsent(uniqueKey, k -> new ArrayList<>()).add(vehicle);
+
+            } catch (Exception e) {
+                log.error("Erro ao processar veículo ID {} para detecção de duplicatas: {}",
+                        vehicle.getId(), e.getMessage());
+            }
+        }
+
+        int duplicatesRemoved = 0;
+        List<Long> idsToRemove = new ArrayList<>();
+
+        for (Map.Entry<String, List<VehicleCache>> entry : vehiclesByHash.entrySet()) {
+            List<VehicleCache> duplicates = entry.getValue();
+
+            if (duplicates.size() > 1) {
+                duplicates.sort((a, b) -> b.getId().compareTo(a.getId()));
+
+                for (int i = 1; i < duplicates.size(); i++) {
+                    idsToRemove.add(duplicates.get(i).getId());
+                    duplicatesRemoved++;
+                }
+            }
+        }
+
+        if (!idsToRemove.isEmpty()) {
+            vehicleCacheRepository.deleteAllById(idsToRemove);
+
+            log.info("Remoção de duplicatas concluída - {} veículos duplicados removidos", duplicatesRemoved);
+        } else {
+            log.info("Nenhuma duplicata encontrada");
+        }
     }
 
     @lombok.Data

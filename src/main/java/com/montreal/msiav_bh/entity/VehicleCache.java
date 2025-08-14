@@ -17,13 +17,21 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "vehicle_cache", indexes = {
-        @Index(name = "idx_placa", columnList = "placa"),
-        @Index(name = "idx_contrato", columnList = "contrato"),
-        @Index(name = "idx_protocolo", columnList = "protocolo"),
-        @Index(name = "idx_api_sync_date", columnList = "api_sync_date"),
-        @Index(name = "idx_unique_vehicle", columnList = "contrato, placa", unique = true)
-})
+@Table(name = "vehicle_cache",
+        indexes = {
+                @Index(name = "idx_placa", columnList = "placa"),
+                @Index(name = "idx_contrato", columnList = "contrato"),
+                @Index(name = "idx_protocolo", columnList = "protocolo"),
+                @Index(name = "idx_api_sync_date", columnList = "api_sync_date"),
+                @Index(name = "idx_contrato_hash", columnList = "contrato_hash"),
+                @Index(name = "idx_placa_hash", columnList = "placa_hash"),
+                @Index(name = "idx_contrato_placa_hash", columnList = "contrato_placa_hash")
+        },
+        uniqueConstraints = {
+                @UniqueConstraint(name = "unique_contrato_hash", columnNames = {"contrato_hash"}),
+                @UniqueConstraint(name = "unique_placa_hash", columnNames = {"placa_hash"}),
+                @UniqueConstraint(name = "unique_contrato_placa_hash", columnNames = {"contrato_placa_hash"})
+        })
 public class VehicleCache {
 
     @Id
@@ -81,4 +89,13 @@ public class VehicleCache {
 
     @Column(name = "api_sync_date")
     private LocalDateTime apiSyncDate;
+
+    @Column(name = "contrato_hash", length = 64)
+    private String contratoHash;
+
+    @Column(name = "placa_hash", length = 64)
+    private String placaHash;
+
+    @Column(name = "contrato_placa_hash", length = 64)
+    private String contratoPlacaHash;
 }
