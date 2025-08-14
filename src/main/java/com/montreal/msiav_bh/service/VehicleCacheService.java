@@ -606,7 +606,7 @@ public class VehicleCacheService {
                     contratoDescriptografado != null ? contratoDescriptografado.length() : 0);
 
             return new VehicleDTO(
-                    entity.getExternalId(),
+                    entity.getId(), // Usando o ID interno do banco ao invés do externalId
                     entity.getCredor(),
                     entity.getDataPedido(),
                     contratoDescriptografado,
