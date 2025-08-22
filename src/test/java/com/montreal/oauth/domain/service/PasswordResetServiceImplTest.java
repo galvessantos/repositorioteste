@@ -76,39 +76,19 @@ class PasswordResetServiceImplTest {
         verify(passwordResetTokenRepository).save(any(PasswordResetToken.class));
     }
 
-    @Test
-    void generatePasswordResetToken_WithValidEmail_ShouldReturnResetLink() {
-        // Arrange
-        String login = "test@example.com";
-        when(userRepository.findByUsername(login)).thenReturn(null);
-        when(userRepository.findByEmail(login)).thenReturn(testUser);
-        when(passwordResetTokenRepository.findValidTokensByUserId(anyLong(), any(LocalDateTime.class)))
-                .thenReturn(Arrays.asList());
-        when(passwordResetTokenRepository.save(any(PasswordResetToken.class))).thenReturn(testToken);
 
-        // Act
-        String result = passwordResetService.generatePasswordResetToken(login);
-
-        // Assert
-        assertNotNull(result);
-        assertTrue(result.contains("https://localhost/reset-password?token="));
-        verify(userRepository).findByUsername(login);
-        verify(userRepository).findByEmail(login);
-    }
 
     @Test
     void generatePasswordResetToken_WithInvalidLogin_ShouldThrowUserNotFoundException() {
         // Arrange
         String login = "invaliduser";
         when(userRepository.findByUsername(login)).thenReturn(null);
-        when(userRepository.findByEmail(login)).thenReturn(null);
 
         // Act & Assert
         assertThrows(UserNotFoundException.class, () -> {
             passwordResetService.generatePasswordResetToken(login);
         });
         verify(userRepository).findByUsername(login);
-        verify(userRepository).findByEmail(login);
     }
 
     @Test

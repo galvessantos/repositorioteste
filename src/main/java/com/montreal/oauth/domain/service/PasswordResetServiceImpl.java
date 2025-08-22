@@ -34,11 +34,11 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
     public String generatePasswordResetToken(String login) {
         log.info("Generating password reset token for login: {}", login);
 
-        // Find user by username or email
-        UserInfo user = findUserByLogin(login);
+        // Buscar usuário APENAS por login (conforme user story)
+        UserInfo user = userRepository.findByUsername(login);
         if (user == null) {
             log.warn("Login not found: {}", login);
-            throw new UserNotFoundException("login informado inválido");
+            throw new UserNotFoundException("Login informado inválido");
         }
 
         // Invalidate any existing valid tokens for this user
@@ -116,22 +116,7 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
         log.info("Cleanup of expired password reset tokens completed");
     }
 
-    private UserInfo findUserByLogin(String login) {
-        // Try to find by username first
-        UserInfo user = userRepository.findByUsername(login);
-        if (user != null) {
-            return user;
-        }
 
-        // If not found by username, try by email
-        try {
-            user = userRepository.findByEmail(login);
-        } catch (Exception e) {
-            log.debug("User not found by email: {}", login);
-        }
-
-        return user;
-    }
 
     private void invalidateExistingTokens(Long userId) {
         LocalDateTime now = LocalDateTime.now();

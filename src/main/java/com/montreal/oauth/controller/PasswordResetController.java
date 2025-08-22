@@ -4,6 +4,7 @@ import com.montreal.oauth.domain.dto.request.PasswordResetGenerateRequest;
 import com.montreal.oauth.domain.dto.response.PasswordResetGenerateResponse;
 import com.montreal.oauth.domain.dto.response.PasswordResetValidateResponse;
 import com.montreal.oauth.domain.service.IPasswordResetService;
+import com.montreal.core.domain.exception.UserNotFoundException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -62,6 +63,14 @@ public class PasswordResetController {
             
             log.info("Password reset token generated successfully for login: {}", request.getLogin());
             return ResponseEntity.ok(response);
+            
+        } catch (UserNotFoundException e) {
+            log.warn("Login not found: {}", request.getLogin());
+            PasswordResetGenerateResponse response = PasswordResetGenerateResponse.builder()
+                    .message("Login informado inválido")
+                    .resetLink(null)
+                    .build();
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
             
         } catch (Exception e) {
             log.error("Error generating password reset token for login: {}", request.getLogin(), e);
