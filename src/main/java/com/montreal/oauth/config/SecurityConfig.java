@@ -132,12 +132,15 @@ public class SecurityConfig {
     
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        System.out.println("🔒 Configurando SecurityConfig - Password reset será público!");
+        
         http
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 // Endpoints públicos
                 .requestMatchers("/api/v1/auth/**").permitAll()
+                .requestMatchers("/api/auth/password-reset/**").permitAll() // Password reset público
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-resources/**", "/webjars/**").permitAll()
                 .requestMatchers("/actuator/**").permitAll()
                 // Todo o resto exige autenticação
@@ -148,6 +151,7 @@ public class SecurityConfig {
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
             .cors(withDefaults());
 
+        System.out.println("✅ SecurityConfig configurado com sucesso!");
         return http.build();
     }
 
