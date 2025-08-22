@@ -132,6 +132,8 @@ public class SecurityConfig {
     
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        System.out.println("🔒 Configurando SecurityConfig - Password reset será público!");
+        
         http
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -149,6 +151,7 @@ public class SecurityConfig {
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
             .cors(withDefaults());
 
+        System.out.println("✅ SecurityConfig configurado com sucesso!");
         return http.build();
     }
 
