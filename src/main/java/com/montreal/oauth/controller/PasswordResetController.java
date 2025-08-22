@@ -5,6 +5,7 @@ import com.montreal.oauth.domain.dto.response.PasswordResetGenerateResponse;
 import com.montreal.oauth.domain.dto.response.PasswordResetValidateResponse;
 import com.montreal.oauth.domain.service.IPasswordResetService;
 import com.montreal.core.domain.exception.UserNotFoundException;
+import org.springframework.security.access.prepost.PreAuthorize;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -48,6 +49,7 @@ public class PasswordResetController {
         )
     })
     @PostMapping("/generate")
+    @PreAuthorize("permitAll()")
     public ResponseEntity<PasswordResetGenerateResponse> generatePasswordResetToken(
             @Valid @RequestBody PasswordResetGenerateRequest request) {
         
@@ -94,6 +96,7 @@ public class PasswordResetController {
         )
     })
     @GetMapping("/validate")
+    @PreAuthorize("permitAll()")
     public ResponseEntity<PasswordResetValidateResponse> validatePasswordResetToken(
             @Parameter(description = "Token de redefinição de senha", required = true)
             @RequestParam String token) {
