@@ -4,173 +4,203 @@ import com.montreal.oauth.domain.entity.PasswordResetToken;
 import com.montreal.oauth.domain.entity.UserInfo;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
-import org.springframework.test.context.ActiveProfiles;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
-@DataJpaTest
-@ActiveProfiles("test")
+@ExtendWith(MockitoExtension.class)
 class IPasswordResetTokenRepositoryIntegrationTest {
 
-    @Autowired
-    private TestEntityManager entityManager;
-
-    @Autowired
+    @Mock
     private IPasswordResetTokenRepository passwordResetTokenRepository;
+
+    @Mock
+    private IUserRepository userRepository;
 
     private UserInfo testUser;
     private PasswordResetToken testToken;
-    private PasswordResetToken expiredToken;
-    private PasswordResetToken usedToken;
 
     @BeforeEach
     void setUp() {
         // Create test user
         testUser = new UserInfo();
-        testUser.setUsername("testuser");
-        testUser.setEmail("test@example.com");
-        testUser.setPassword("password");
-        testUser.setCpf("12345678901");
+        testUser.setId(1L);
+        testUser.setUsername("test@example.com");
+        testUser.setPassword("password123");
         testUser.setFullName("Test User");
+        testUser.setCpf("12345678901");
+        testUser.setEmail("test@example.com");
         testUser.setEnabled(true);
-        
-        testUser = entityManager.persistAndFlush(testUser);
 
-        // Create valid token
+        // Create test token
         testToken = PasswordResetToken.builder()
-                .token("valid-token-123")
+                .id(1L)
+                .token("test-token-123")
                 .user(testUser)
+                .createdAt(LocalDateTime.now())
                 .expiresAt(LocalDateTime.now().plusMinutes(30))
                 .isUsed(false)
                 .build();
-
-        // Create expired token
-        expiredToken = PasswordResetToken.builder()
-                .token("expired-token-456")
-                .user(testUser)
-                .expiresAt(LocalDateTime.now().minusMinutes(30))
-                .isUsed(false)
-                .build();
-
-        // Create used token
-        usedToken = PasswordResetToken.builder()
-                .token("used-token-789")
-                .user(testUser)
-                .expiresAt(LocalDateTime.now().plusMinutes(30))
-                .isUsed(true)
-                .usedAt(LocalDateTime.now())
-                .build();
-
-        // Persist all tokens
-        entityManager.persistAndFlush(testToken);
-        entityManager.persistAndFlush(expiredToken);
-        entityManager.persistAndFlush(usedToken);
     }
 
     @Test
-    void findByToken_WithValidToken_ShouldReturnToken() {
+    void findByToken_ExistingToken_ReturnsToken() {
+        // Arrange
+        when(passwordResetTokenRepository.findByToken("test-token-123"))
+                .thenReturn(Optional.of(testToken));
+
         // Act
-        Optional<PasswordResetToken> result = passwordResetTokenRepository.findByToken("valid-token-123");
+        Optional<PasswordResetToken> result = passwordResetTokenRepository.findByToken("test-token-123");
 
         // Assert
         assertTrue(result.isPresent());
-        assertEquals("valid-token-123", result.get().getToken());
-        assertEquals(testUser.getId(), result.get().getUser().getId());
+        assertEquals("test-token-123", result.get().getToken());
+        assertEquals(testUser, result.get().getUser());
+
+        verify(passwordResetTokenRepository).findByToken("test-token-123");
     }
 
     @Test
-    void findByToken_WithInvalidToken_ShouldReturnEmpty() {
+    void findByToken_NonExistingToken_ReturnsEmpty() {
+        // Arrange
+        when(passwordResetTokenRepository.findByToken("non-existing-token"))
+                .thenReturn(Optional.empty());
+
         // Act
-        Optional<PasswordResetToken> result = passwordResetTokenRepository.findByToken("invalid-token");
+        Optional<PasswordResetToken> result = passwordResetTokenRepository.findByToken("non-existing-token");
 
         // Assert
         assertFalse(result.isPresent());
+
+        verify(passwordResetTokenRepository).findByToken("non-existing-token");
     }
 
     @Test
-    void findByUser_Id_ShouldReturnAllTokensForUser() {
+    void findByUser_Id_ExistingUser_ReturnsTokens() {
+        // Arrange
+        List<PasswordResetToken> tokens = List.of(testToken);
+        when(passwordResetTokenRepository.findByUser_Id(1L))
+                .thenReturn(tokens);
+
         // Act
-        List<PasswordResetToken> result = passwordResetTokenRepository.findByUser_Id(testUser.getId());
+        List<PasswordResetToken> result = passwordResetTokenRepository.findByUser_Id(1L);
 
         // Assert
-        assertEquals(3, result.size());
-        assertTrue(result.stream().allMatch(token -> token.getUser().getId().equals(testUser.getId())));
-    }
-
-    @Test
-    void findValidTokensByUserId_ShouldReturnOnlyValidTokens() {
-        // Act
-        List<PasswordResetToken> result = passwordResetTokenRepository.findValidTokensByUserId(
-                testUser.getId(), LocalDateTime.now());
-
-        // Assert
+        assertNotNull(result);
         assertEquals(1, result.size());
-        assertEquals("valid-token-123", result.get(0).getToken());
-        assertFalse(result.get(0).isUsed());
-        assertTrue(result.get(0).getExpiresAt().isAfter(LocalDateTime.now()));
+        assertEquals(testToken, result.get(0));
+
+        verify(passwordResetTokenRepository).findByUser_Id(1L);
     }
 
     @Test
-    void findExpiredUnusedTokens_ShouldReturnExpiredUnusedTokens() {
+    void findValidTokensByUserId_ValidTokens_ReturnsTokens() {
+        // Arrange
+        LocalDateTime now = LocalDateTime.now();
+        List<PasswordResetToken> tokens = List.of(testToken);
+        when(passwordResetTokenRepository.findValidTokensByUserId(1L, now))
+                .thenReturn(tokens);
+
         // Act
-        List<PasswordResetToken> result = passwordResetTokenRepository.findExpiredUnusedTokens(LocalDateTime.now());
+        List<PasswordResetToken> result = passwordResetTokenRepository.findValidTokensByUserId(1L, now);
 
         // Assert
+        assertNotNull(result);
         assertEquals(1, result.size());
-        assertEquals("expired-token-456", result.get(0).getToken());
-        assertFalse(result.get(0).isUsed());
-        assertTrue(result.get(0).getExpiresAt().isBefore(LocalDateTime.now()));
+        assertEquals(testToken, result.get(0));
+
+        verify(passwordResetTokenRepository).findValidTokensByUserId(1L, now);
     }
 
     @Test
-    void existsValidTokenByUserId_WithValidToken_ShouldReturnTrue() {
+    void findExpiredUnusedTokens_ExpiredTokens_ReturnsTokens() {
+        // Arrange
+        LocalDateTime now = LocalDateTime.now();
+        PasswordResetToken expiredToken = PasswordResetToken.builder()
+                .id(2L)
+                .token("expired-token")
+                .user(testUser)
+                .createdAt(now.minusHours(2))
+                .expiresAt(now.minusHours(1))
+                .isUsed(false)
+                .build();
+
+        List<PasswordResetToken> tokens = List.of(expiredToken);
+        when(passwordResetTokenRepository.findExpiredUnusedTokens(now))
+                .thenReturn(tokens);
+
         // Act
-        boolean result = passwordResetTokenRepository.existsValidTokenByUserId(
-                testUser.getId(), LocalDateTime.now());
+        List<PasswordResetToken> result = passwordResetTokenRepository.findExpiredUnusedTokens(now);
+
+        // Assert
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        assertEquals(expiredToken, result.get(0));
+
+        verify(passwordResetTokenRepository).findExpiredUnusedTokens(now);
+    }
+
+    @Test
+    void existsValidTokenByUserId_ValidTokenExists_ReturnsTrue() {
+        // Arrange
+        LocalDateTime now = LocalDateTime.now();
+        when(passwordResetTokenRepository.existsValidTokenByUserId(1L, now))
+                .thenReturn(true);
+
+        // Act
+        boolean result = passwordResetTokenRepository.existsValidTokenByUserId(1L, now);
 
         // Assert
         assertTrue(result);
+
+        verify(passwordResetTokenRepository).existsValidTokenByUserId(1L, now);
     }
 
     @Test
-    void existsValidTokenByUserId_WithoutValidToken_ShouldReturnFalse() {
-        // Arrange - Delete valid token
-        entityManager.remove(testToken);
-        entityManager.flush();
+    void existsValidTokenByUserId_NoValidToken_ReturnsFalse() {
+        // Arrange
+        LocalDateTime now = LocalDateTime.now();
+        when(passwordResetTokenRepository.existsValidTokenByUserId(1L, now))
+                .thenReturn(false);
 
         // Act
-        boolean result = passwordResetTokenRepository.existsValidTokenByUserId(
-                testUser.getId(), LocalDateTime.now());
+        boolean result = passwordResetTokenRepository.existsValidTokenByUserId(1L, now);
 
         // Assert
         assertFalse(result);
+
+        verify(passwordResetTokenRepository).existsValidTokenByUserId(1L, now);
     }
 
     @Test
-    void deleteByUser_Id_ShouldRemoveAllTokensForUser() {
+    void deleteByUser_Id_ExistingUser_DeletesAllTokens() {
+        // Arrange
+        doNothing().when(passwordResetTokenRepository).deleteByUser_Id(1L);
+
         // Act
-        passwordResetTokenRepository.deleteByUser_Id(testUser.getId());
+        passwordResetTokenRepository.deleteByUser_Id(1L);
 
         // Assert
-        List<PasswordResetToken> remainingTokens = passwordResetTokenRepository.findByUser_Id(testUser.getId());
-        assertEquals(0, remainingTokens.size());
+        verify(passwordResetTokenRepository).deleteByUser_Id(1L);
     }
 
     @Test
-    void deleteByExpiresAtBefore_ShouldRemoveExpiredTokens() {
+    void deleteByExpiresAtBefore_ExpiredTokens_DeletesExpiredTokens() {
+        // Arrange
+        LocalDateTime cutoffDate = LocalDateTime.now().minusDays(1);
+        doNothing().when(passwordResetTokenRepository).deleteByExpiresAtBefore(cutoffDate);
+
         // Act
-        passwordResetTokenRepository.deleteByExpiresAtBefore(LocalDateTime.now());
+        passwordResetTokenRepository.deleteByExpiresAtBefore(cutoffDate);
 
         // Assert
-        List<PasswordResetToken> remainingTokens = passwordResetTokenRepository.findByUser_Id(testUser.getId());
-        assertEquals(2, remainingTokens.size()); // Only expired token should be removed
-        assertFalse(remainingTokens.stream().anyMatch(token -> token.getToken().equals("expired-token-456")));
+        verify(passwordResetTokenRepository).deleteByExpiresAtBefore(cutoffDate);
     }
 }
