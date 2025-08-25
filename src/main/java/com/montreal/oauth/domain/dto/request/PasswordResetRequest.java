@@ -24,4 +24,7 @@ public class PasswordResetRequest {
         message = "A senha deve conter pelo menos 1 letra maiúscula, 1 minúscula, 1 número e 1 caractere especial (_ @ #)"
     )
     private String newPassword;
+
+    @NotBlank(message = "Confirmação de senha é obrigatória")
+    private String confirmPassword;
 }

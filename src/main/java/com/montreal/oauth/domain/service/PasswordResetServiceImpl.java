@@ -115,7 +115,7 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
 
     @Override
     @Transactional
-    public boolean resetPassword(String token, String newPassword) {
+    public boolean resetPassword(String token, String newPassword, String confirmPassword) {
         log.info("Attempting to reset password with token: {}", token);
 
         // Validar o token primeiro
@@ -136,6 +136,9 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
 
         // Validar a nova senha
         validatePassword(newPassword);
+        
+        // Validar confirmação de senha
+        validatePasswordConfirmation(newPassword, confirmPassword);
 
         // Criptografar a nova senha com BCrypt
         BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
@@ -213,5 +216,19 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
         }
 
         log.debug("Password validation passed");
+    }
+
+    private void validatePasswordConfirmation(String password, String confirmPassword) {
+        log.debug("Validating password confirmation");
+        
+        if (confirmPassword == null || confirmPassword.trim().isEmpty()) {
+            throw new IllegalArgumentException("Confirmação de senha é obrigatória");
+        }
+        
+        if (!password.equals(confirmPassword)) {
+            throw new IllegalArgumentException("As senhas não coincidem");
+        }
+        
+        log.debug("Password confirmation validation passed");
     }
 }

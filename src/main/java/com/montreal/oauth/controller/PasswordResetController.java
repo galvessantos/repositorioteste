@@ -175,7 +175,7 @@ public class PasswordResetController {
         log.info("Attempting to reset password with token: {}", request.getToken());
 
         try {
-            boolean success = passwordResetService.resetPassword(request.getToken(), request.getNewPassword());
+            boolean success = passwordResetService.resetPassword(request.getToken(), request.getNewPassword(), request.getConfirmPassword());
 
             if (success) {
                 PasswordResetResponse response = PasswordResetResponse.builder()
