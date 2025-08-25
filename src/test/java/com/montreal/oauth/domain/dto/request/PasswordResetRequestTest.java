@@ -102,8 +102,8 @@ class PasswordResetRequestTest {
     void testPasswordTooLong() {
         PasswordResetRequest request = PasswordResetRequest.builder()
                 .token("valid-token-123")
-                .newPassword("Ab@12345")
-                .confirmPassword("Ab@12345")
+                .newPassword("Ab@123456")
+                .confirmPassword("Ab@123456")
                 .build();
 
         Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
@@ -137,8 +137,8 @@ class PasswordResetRequestTest {
     @Test
     void testInvalidPasswords() {
         String[] invalidPasswords = {
-                "Ab@",      // muito curto
-                "Ab@12345", // muito longo
+                "Ab@",       // muito curto (3 caracteres)
+                "Ab@123456", // muito longo (10 caracteres)
         };
 
         for (String password : invalidPasswords) {
