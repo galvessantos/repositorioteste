@@ -3,7 +3,9 @@ package com.montreal.oauth.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.montreal.oauth.domain.dto.request.PasswordResetGenerateRequest;
+import com.montreal.oauth.domain.dto.request.PasswordResetRequest;
 import com.montreal.oauth.domain.dto.response.PasswordResetGenerateResponse;
+import com.montreal.oauth.domain.dto.response.PasswordResetResponse;
 import com.montreal.oauth.domain.dto.response.PasswordResetValidateResponse;
 import com.montreal.oauth.domain.service.IPasswordResetService;
 import org.junit.jupiter.api.BeforeEach;
@@ -144,4 +146,81 @@ class PasswordResetControllerUnitTest {
         verify(passwordResetService).cleanupExpiredTokens();
     }
 
+    @Test
+    void resetPassword_ValidRequest_ReturnsSuccess() {
+        String token = "valid-token-123";
+        String newPassword = "Test@123";
+        PasswordResetRequest request = PasswordResetRequest.builder()
+                .token(token)
+                .newPassword(newPassword)
+                .build();
+
+        when(passwordResetService.resetPassword(token, newPassword)).thenReturn(true);
+
+        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertTrue(response.getBody().isSuccess());
+        assertEquals("Senha redefinida com sucesso", response.getBody().getMessage());
+        verify(passwordResetService).resetPassword(token, newPassword);
+    }
+
+    @Test
+    void resetPassword_InvalidToken_ReturnsNotFound() {
+        String token = "invalid-token";
+        String newPassword = "Test@123";
+        PasswordResetRequest request = PasswordResetRequest.builder()
+                .token(token)
+                .newPassword(newPassword)
+                .build();
+
+        when(passwordResetService.resetPassword(token, newPassword)).thenReturn(false);
+
+        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
+
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        assertFalse(response.getBody().isSuccess());
+        assertEquals("Token inválido ou expirado", response.getBody().getMessage());
+        verify(passwordResetService).resetPassword(token, newPassword);
+    }
+
+    @Test
+    void resetPassword_InvalidPassword_ReturnsBadRequest() {
+        String token = "valid-token";
+        String invalidPassword = "weak";
+        PasswordResetRequest request = PasswordResetRequest.builder()
+                .token(token)
+                .newPassword(invalidPassword)
+                .build();
+
+        when(passwordResetService.resetPassword(token, invalidPassword))
+                .thenThrow(new IllegalArgumentException("A senha deve ter entre 4 e 8 caracteres"));
+
+        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertFalse(response.getBody().isSuccess());
+        assertEquals("A senha deve ter entre 4 e 8 caracteres", response.getBody().getMessage());
+        verify(passwordResetService).resetPassword(token, invalidPassword);
+    }
+
+    @Test
+    void resetPassword_ServiceThrowsException_ReturnsInternalServerError() {
+        String token = "valid-token";
+        String newPassword = "Test@123";
+        PasswordResetRequest request = PasswordResetRequest.builder()
+                .token(token)
+                .newPassword(newPassword)
+                .build();
+
+        when(passwordResetService.resetPassword(token, newPassword))
+                .thenThrow(new RuntimeException("Database error"));
+
+        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
+
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+        assertFalse(response.getBody().isSuccess());
+        assertEquals("Erro interno do servidor", response.getBody().getMessage());
+        verify(passwordResetService).resetPassword(token, newPassword);
+    }
 }

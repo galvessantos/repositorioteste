@@ -5,6 +5,7 @@ import com.montreal.oauth.domain.entity.UserInfo;
 import com.montreal.core.domain.exception.UserNotFoundException;
 import com.montreal.oauth.domain.repository.IPasswordResetTokenRepository;
 import com.montreal.oauth.domain.repository.IUserRepository;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -112,6 +113,49 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
         log.info("Cleanup of expired password reset tokens completed");
     }
 
+    @Override
+    @Transactional
+    public boolean resetPassword(String token, String newPassword) {
+        log.info("Attempting to reset password with token: {}", token);
+
+        // Validar o token primeiro
+        if (!validatePasswordResetToken(token)) {
+            log.warn("Invalid or expired token for password reset: {}", token);
+            return false;
+        }
+
+        // Buscar o token
+        Optional<PasswordResetToken> tokenOpt = passwordResetTokenRepository.findByToken(token);
+        if (tokenOpt.isEmpty()) {
+            log.warn("Token not found for password reset: {}", token);
+            return false;
+        }
+
+        PasswordResetToken resetToken = tokenOpt.get();
+        UserInfo user = resetToken.getUser();
+
+        // Validar a nova senha
+        validatePassword(newPassword);
+
+        // Criptografar a nova senha com BCrypt
+        BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
+        String encodedPassword = encoder.encode(newPassword);
+
+        // Atualizar a senha do usuário
+        user.setPassword(encodedPassword);
+        user.setPasswordChangedByUser(true);
+        user.setEnabled(true);
+
+        // Salvar o usuário
+        userRepository.save(user);
+
+        // Marcar o token como usado
+        markTokenAsUsed(token);
+
+        log.info("Password reset successfully for user: {}", user.getUsername());
+        return true;
+    }
+
 
 
     private void invalidateExistingTokens(Long userId) {
@@ -143,5 +187,31 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
 
     private String generateResetLink(String token) {
         return String.format("%s/reset-password?token=%s", baseUrl, token);
+    }
+
+    private void validatePassword(String password) {
+        log.debug("Validating password criteria");
+
+        if (password == null || password.length() < 4 || password.length() > 8) {
+            throw new IllegalArgumentException("A senha deve ter entre 4 e 8 caracteres");
+        }
+        
+        if (!password.matches(".*[a-z].*")) {
+            throw new IllegalArgumentException("A senha deve conter pelo menos uma letra minúscula");
+        }
+        
+        if (!password.matches(".*[A-Z].*")) {
+            throw new IllegalArgumentException("A senha deve conter pelo menos uma letra maiúscula");
+        }
+        
+        if (!password.matches(".*\\d.*")) {
+            throw new IllegalArgumentException("A senha deve conter pelo menos um número");
+        }
+        
+        if (!password.matches(".*[_@#].*")) {
+            throw new IllegalArgumentException("A senha deve conter pelo menos um dos caracteres especiais: _ @ #");
+        }
+
+        log.debug("Password validation passed");
     }
 }

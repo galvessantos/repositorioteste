@@ -1,7 +1,9 @@
 package com.montreal.oauth.controller;
 
 import com.montreal.oauth.domain.dto.request.PasswordResetGenerateRequest;
+import com.montreal.oauth.domain.dto.request.PasswordResetRequest;
 import com.montreal.oauth.domain.dto.response.PasswordResetGenerateResponse;
+import com.montreal.oauth.domain.dto.response.PasswordResetResponse;
 import com.montreal.oauth.domain.dto.response.PasswordResetValidateResponse;
 import com.montreal.oauth.domain.service.IPasswordResetService;
 import com.montreal.core.domain.exception.UserNotFoundException;
@@ -143,6 +145,71 @@ public class PasswordResetController {
         } catch (Exception e) {
             log.error("Error during cleanup of expired tokens", e);
             throw e;
+        }
+    }
+
+    @Operation(
+            summary = "Redefinir senha",
+            description = "Redefine a senha do usuário usando um token válido"
+    )
+    @ApiResponses(value = {
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Senha redefinida com sucesso",
+                    content = @Content(schema = @Schema(implementation = PasswordResetResponse.class))
+            ),
+            @ApiResponse(
+                    responseCode = "400",
+                    description = "Dados de entrada inválidos ou validação de senha falhou"
+            ),
+            @ApiResponse(
+                    responseCode = "404",
+                    description = "Token inválido ou expirado"
+            )
+    })
+    @PostMapping("/reset")
+    @PreAuthorize("permitAll()")
+    public ResponseEntity<PasswordResetResponse> resetPassword(
+            @Valid @RequestBody PasswordResetRequest request) {
+
+        log.info("Attempting to reset password with token: {}", request.getToken());
+
+        try {
+            boolean success = passwordResetService.resetPassword(request.getToken(), request.getNewPassword());
+
+            if (success) {
+                PasswordResetResponse response = PasswordResetResponse.builder()
+                        .message("Senha redefinida com sucesso")
+                        .success(true)
+                        .build();
+
+                log.info("Password reset completed successfully");
+                return ResponseEntity.ok(response);
+            } else {
+                PasswordResetResponse response = PasswordResetResponse.builder()
+                        .message("Token inválido ou expirado")
+                        .success(false)
+                        .build();
+
+                log.warn("Password reset failed - invalid or expired token");
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+            }
+
+        } catch (IllegalArgumentException e) {
+            log.warn("Password validation failed: {}", e.getMessage());
+            PasswordResetResponse response = PasswordResetResponse.builder()
+                    .message(e.getMessage())
+                    .success(false)
+                    .build();
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+
+        } catch (Exception e) {
+            log.error("Error during password reset", e);
+            PasswordResetResponse response = PasswordResetResponse.builder()
+                    .message("Erro interno do servidor")
+                    .success(false)
+                    .build();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
     }
 }
