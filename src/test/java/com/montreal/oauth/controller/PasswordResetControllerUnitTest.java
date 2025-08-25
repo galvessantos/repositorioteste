@@ -150,50 +150,56 @@ class PasswordResetControllerUnitTest {
     void resetPassword_ValidRequest_ReturnsSuccess() {
         String token = "valid-token-123";
         String newPassword = "Test@123";
+        String confirmPassword = "Test@123";
         PasswordResetRequest request = PasswordResetRequest.builder()
                 .token(token)
                 .newPassword(newPassword)
+                .confirmPassword(confirmPassword)
                 .build();
 
-        when(passwordResetService.resetPassword(token, newPassword)).thenReturn(true);
+        when(passwordResetService.resetPassword(token, newPassword, confirmPassword)).thenReturn(true);
 
         ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertTrue(response.getBody().isSuccess());
         assertEquals("Senha redefinida com sucesso", response.getBody().getMessage());
-        verify(passwordResetService).resetPassword(token, newPassword);
+        verify(passwordResetService).resetPassword(token, newPassword, confirmPassword);
     }
 
     @Test
     void resetPassword_InvalidToken_ReturnsNotFound() {
         String token = "invalid-token";
         String newPassword = "Test@123";
+        String confirmPassword = "Test@123";
         PasswordResetRequest request = PasswordResetRequest.builder()
                 .token(token)
                 .newPassword(newPassword)
+                .confirmPassword(confirmPassword)
                 .build();
 
-        when(passwordResetService.resetPassword(token, newPassword)).thenReturn(false);
+        when(passwordResetService.resetPassword(token, newPassword, confirmPassword)).thenReturn(false);
 
         ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
 
         assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
         assertFalse(response.getBody().isSuccess());
         assertEquals("Token inválido ou expirado", response.getBody().getMessage());
-        verify(passwordResetService).resetPassword(token, newPassword);
+        verify(passwordResetService).resetPassword(token, newPassword, confirmPassword);
     }
 
     @Test
     void resetPassword_InvalidPassword_ReturnsBadRequest() {
         String token = "valid-token";
         String invalidPassword = "weak";
+        String confirmPassword = "weak";
         PasswordResetRequest request = PasswordResetRequest.builder()
                 .token(token)
                 .newPassword(invalidPassword)
+                .confirmPassword(confirmPassword)
                 .build();
 
-        when(passwordResetService.resetPassword(token, invalidPassword))
+        when(passwordResetService.resetPassword(token, invalidPassword, confirmPassword))
                 .thenThrow(new IllegalArgumentException("A senha deve ter entre 4 e 8 caracteres"));
 
         ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
@@ -201,19 +207,21 @@ class PasswordResetControllerUnitTest {
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
         assertFalse(response.getBody().isSuccess());
         assertEquals("A senha deve ter entre 4 e 8 caracteres", response.getBody().getMessage());
-        verify(passwordResetService).resetPassword(token, invalidPassword);
+        verify(passwordResetService).resetPassword(token, invalidPassword, confirmPassword);
     }
 
     @Test
     void resetPassword_ServiceThrowsException_ReturnsInternalServerError() {
         String token = "valid-token";
         String newPassword = "Test@123";
+        String confirmPassword = "Test@123";
         PasswordResetRequest request = PasswordResetRequest.builder()
                 .token(token)
                 .newPassword(newPassword)
+                .confirmPassword(confirmPassword)
                 .build();
 
-        when(passwordResetService.resetPassword(token, newPassword))
+        when(passwordResetService.resetPassword(token, newPassword, confirmPassword))
                 .thenThrow(new RuntimeException("Database error"));
 
         ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
@@ -221,6 +229,50 @@ class PasswordResetControllerUnitTest {
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
         assertFalse(response.getBody().isSuccess());
         assertEquals("Erro interno do servidor", response.getBody().getMessage());
-        verify(passwordResetService).resetPassword(token, newPassword);
+        verify(passwordResetService).resetPassword(token, newPassword, confirmPassword);
+    }
+
+    @Test
+    void resetPassword_PasswordMismatch_ReturnsBadRequest() {
+        String token = "valid-token";
+        String newPassword = "Test@123";
+        String confirmPassword = "Test@456";
+        PasswordResetRequest request = PasswordResetRequest.builder()
+                .token(token)
+                .newPassword(newPassword)
+                .confirmPassword(confirmPassword)
+                .build();
+
+        when(passwordResetService.resetPassword(token, newPassword, confirmPassword))
+                .thenThrow(new IllegalArgumentException("As senhas não coincidem"));
+
+        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertFalse(response.getBody().isSuccess());
+        assertEquals("As senhas não coincidem", response.getBody().getMessage());
+        verify(passwordResetService).resetPassword(token, newPassword, confirmPassword);
+    }
+
+    @Test
+    void resetPassword_EmptyConfirmPassword_ReturnsBadRequest() {
+        String token = "valid-token";
+        String newPassword = "Test@123";
+        String confirmPassword = "";
+        PasswordResetRequest request = PasswordResetRequest.builder()
+                .token(token)
+                .newPassword(newPassword)
+                .confirmPassword(confirmPassword)
+                .build();
+
+        when(passwordResetService.resetPassword(token, newPassword, confirmPassword))
+                .thenThrow(new IllegalArgumentException("Confirmação de senha é obrigatória"));
+
+        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertFalse(response.getBody().isSuccess());
+        assertEquals("Confirmação de senha é obrigatória", response.getBody().getMessage());
+        verify(passwordResetService).resetPassword(token, newPassword, confirmPassword);
     }
 }

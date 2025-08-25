@@ -203,12 +203,13 @@ class PasswordResetServiceImplUnitTest {
     void resetPassword_WithValidTokenAndValidPassword_ShouldReturnTrue() {
         String token = "valid-token";
         String newPassword = "Test@123";
+        String confirmPassword = "Test@123";
         
         when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
         when(userRepository.save(any(UserInfo.class))).thenReturn(testUser);
         when(passwordResetTokenRepository.save(any(PasswordResetToken.class))).thenReturn(testToken);
 
-        boolean result = passwordResetService.resetPassword(token, newPassword);
+        boolean result = passwordResetService.resetPassword(token, newPassword, confirmPassword);
 
         assertTrue(result);
         verify(userRepository).save(any(UserInfo.class));
@@ -219,10 +220,11 @@ class PasswordResetServiceImplUnitTest {
     void resetPassword_WithInvalidToken_ShouldReturnFalse() {
         String token = "invalid-token";
         String newPassword = "Test@123";
+        String confirmPassword = "Test@123";
 
         when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.empty());
 
-        boolean result = passwordResetService.resetPassword(token, newPassword);
+        boolean result = passwordResetService.resetPassword(token, newPassword, confirmPassword);
 
         assertFalse(result);
         verify(userRepository, never()).save(any(UserInfo.class));
@@ -232,11 +234,12 @@ class PasswordResetServiceImplUnitTest {
     void resetPassword_WithExpiredToken_ShouldReturnFalse() {
         String token = "expired-token";
         String newPassword = "Test@123";
+        String confirmPassword = "Test@123";
         
         testToken.setExpiresAt(LocalDateTime.now().minusMinutes(1));
         when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
 
-        boolean result = passwordResetService.resetPassword(token, newPassword);
+        boolean result = passwordResetService.resetPassword(token, newPassword, confirmPassword);
 
         assertFalse(result);
         verify(userRepository, never()).save(any(UserInfo.class));
@@ -246,11 +249,12 @@ class PasswordResetServiceImplUnitTest {
     void resetPassword_WithUsedToken_ShouldReturnFalse() {
         String token = "used-token";
         String newPassword = "Test@123";
+        String confirmPassword = "Test@123";
         
         testToken.setUsed(true);
         when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
 
-        boolean result = passwordResetService.resetPassword(token, newPassword);
+        boolean result = passwordResetService.resetPassword(token, newPassword, confirmPassword);
 
         assertFalse(result);
         verify(userRepository, never()).save(any(UserInfo.class));
@@ -260,11 +264,12 @@ class PasswordResetServiceImplUnitTest {
     void resetPassword_WithInvalidPassword_ShouldThrowException() {
         String token = "valid-token";
         String invalidPassword = "weak";
+        String confirmPassword = "weak";
 
         when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
 
         assertThrows(IllegalArgumentException.class, () -> {
-            passwordResetService.resetPassword(token, invalidPassword);
+            passwordResetService.resetPassword(token, invalidPassword, confirmPassword);
         });
         
         verify(userRepository, never()).save(any(UserInfo.class));
@@ -274,11 +279,12 @@ class PasswordResetServiceImplUnitTest {
     void resetPassword_WithPasswordTooShort_ShouldThrowException() {
         String token = "valid-token";
         String shortPassword = "Ab@1";
+        String confirmPassword = "Ab@1";
 
         when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
 
         assertThrows(IllegalArgumentException.class, () -> {
-            passwordResetService.resetPassword(token, shortPassword);
+            passwordResetService.resetPassword(token, shortPassword, confirmPassword);
         });
     }
 
@@ -286,11 +292,12 @@ class PasswordResetServiceImplUnitTest {
     void resetPassword_WithPasswordTooLong_ShouldThrowException() {
         String token = "valid-token";
         String longPassword = "Ab@12345";
+        String confirmPassword = "Ab@12345";
 
         when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
 
         assertThrows(IllegalArgumentException.class, () -> {
-            passwordResetService.resetPassword(token, longPassword);
+            passwordResetService.resetPassword(token, longPassword, confirmPassword);
         });
     }
 
@@ -298,11 +305,12 @@ class PasswordResetServiceImplUnitTest {
     void resetPassword_WithPasswordWithoutLowerCase_ShouldThrowException() {
         String token = "valid-token";
         String passwordWithoutLower = "TEST@12";
+        String confirmPassword = "TEST@12";
 
         when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
 
         assertThrows(IllegalArgumentException.class, () -> {
-            passwordResetService.resetPassword(token, passwordWithoutLower);
+            passwordResetService.resetPassword(token, passwordWithoutLower, confirmPassword);
         });
     }
 
@@ -310,11 +318,12 @@ class PasswordResetServiceImplUnitTest {
     void resetPassword_WithPasswordWithoutUpperCase_ShouldThrowException() {
         String token = "valid-token";
         String passwordWithoutUpper = "test@12";
+        String confirmPassword = "test@12";
 
         when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
 
         assertThrows(IllegalArgumentException.class, () -> {
-            passwordResetService.resetPassword(token, passwordWithoutUpper);
+            passwordResetService.resetPassword(token, passwordWithoutUpper, confirmPassword);
         });
     }
 
@@ -322,11 +331,12 @@ class PasswordResetServiceImplUnitTest {
     void resetPassword_WithPasswordWithoutNumber_ShouldThrowException() {
         String token = "valid-token";
         String passwordWithoutNumber = "Test@ab";
+        String confirmPassword = "Test@ab";
 
         when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
 
         assertThrows(IllegalArgumentException.class, () -> {
-            passwordResetService.resetPassword(token, passwordWithoutNumber);
+            passwordResetService.resetPassword(token, passwordWithoutNumber, confirmPassword);
         });
     }
 
@@ -334,11 +344,12 @@ class PasswordResetServiceImplUnitTest {
     void resetPassword_WithPasswordWithoutSpecialChar_ShouldThrowException() {
         String token = "valid-token";
         String passwordWithoutSpecial = "Test123";
+        String confirmPassword = "Test123";
 
         when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
 
         assertThrows(IllegalArgumentException.class, () -> {
-            passwordResetService.resetPassword(token, passwordWithoutSpecial);
+            passwordResetService.resetPassword(token, passwordWithoutSpecial, confirmPassword);
         });
     }
 
@@ -346,12 +357,13 @@ class PasswordResetServiceImplUnitTest {
     void resetPassword_ShouldUpdateUserPasswordAndMarkTokenAsUsed() {
         String token = "valid-token";
         String newPassword = "Test@123";
+        String confirmPassword = "Test@123";
         
         when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
         when(userRepository.save(any(UserInfo.class))).thenReturn(testToken.getUser());
         when(passwordResetTokenRepository.save(any(PasswordResetToken.class))).thenReturn(testToken);
 
-        boolean result = passwordResetService.resetPassword(token, newPassword);
+        boolean result = passwordResetService.resetPassword(token, newPassword, confirmPassword);
 
         assertTrue(result);
         
@@ -367,5 +379,50 @@ class PasswordResetServiceImplUnitTest {
         verify(passwordResetTokenRepository).save(argThat(tokenEntity -> 
             tokenEntity.isUsed() && tokenEntity.getUsedAt() != null
         ));
+    }
+
+    @Test
+    void resetPassword_WithPasswordMismatch_ShouldThrowException() {
+        String token = "valid-token";
+        String newPassword = "Test@123";
+        String confirmPassword = "Test@456";
+
+        when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
+
+        assertThrows(IllegalArgumentException.class, () -> {
+            passwordResetService.resetPassword(token, newPassword, confirmPassword);
+        });
+        
+        verify(userRepository, never()).save(any(UserInfo.class));
+    }
+
+    @Test
+    void resetPassword_WithEmptyConfirmPassword_ShouldThrowException() {
+        String token = "valid-token";
+        String newPassword = "Test@123";
+        String confirmPassword = "";
+
+        when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
+
+        assertThrows(IllegalArgumentException.class, () -> {
+            passwordResetService.resetPassword(token, newPassword, confirmPassword);
+        });
+        
+        verify(userRepository, never()).save(any(UserInfo.class));
+    }
+
+    @Test
+    void resetPassword_WithNullConfirmPassword_ShouldThrowException() {
+        String token = "valid-token";
+        String newPassword = "Test@123";
+        String confirmPassword = null;
+
+        when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(testToken));
+
+        assertThrows(IllegalArgumentException.class, () -> {
+            passwordResetService.resetPassword(token, newPassword, confirmPassword);
+        });
+        
+        verify(userRepository, never()).save(any(UserInfo.class));
     }
 }

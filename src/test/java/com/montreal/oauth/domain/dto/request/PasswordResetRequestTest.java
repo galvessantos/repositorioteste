@@ -26,6 +26,7 @@ class PasswordResetRequestTest {
         PasswordResetRequest request = PasswordResetRequest.builder()
                 .token("valid-token-123")
                 .newPassword("Test@123")
+                .confirmPassword("Test@123")
                 .build();
 
         Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
@@ -37,6 +38,7 @@ class PasswordResetRequestTest {
         PasswordResetRequest request = PasswordResetRequest.builder()
                 .token(null)
                 .newPassword("Test@123")
+                .confirmPassword("Test@123")
                 .build();
 
         Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
@@ -49,6 +51,7 @@ class PasswordResetRequestTest {
         PasswordResetRequest request = PasswordResetRequest.builder()
                 .token("")
                 .newPassword("Test@123")
+                .confirmPassword("Test@123")
                 .build();
 
         Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
@@ -61,6 +64,7 @@ class PasswordResetRequestTest {
         PasswordResetRequest request = PasswordResetRequest.builder()
                 .token("valid-token-123")
                 .newPassword(null)
+                .confirmPassword("Test@123")
                 .build();
 
         Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
@@ -73,6 +77,7 @@ class PasswordResetRequestTest {
         PasswordResetRequest request = PasswordResetRequest.builder()
                 .token("valid-token-123")
                 .newPassword("")
+                .confirmPassword("")
                 .build();
 
         Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
@@ -166,6 +171,7 @@ class PasswordResetRequestTest {
             PasswordResetRequest request = PasswordResetRequest.builder()
                     .token("valid-token-123")
                     .newPassword(password)
+                    .confirmPassword(password)
                     .build();
 
             Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
@@ -191,10 +197,37 @@ class PasswordResetRequestTest {
             PasswordResetRequest request = PasswordResetRequest.builder()
                     .token("valid-token-123")
                     .newPassword(password)
+                    .confirmPassword(password)
                     .build();
 
             Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
             assertFalse(violations.isEmpty(), "Password '" + password + "' should be invalid");
         }
+    }
+
+    @Test
+    void testNullConfirmPassword() {
+        PasswordResetRequest request = PasswordResetRequest.builder()
+                .token("valid-token-123")
+                .newPassword("Test@123")
+                .confirmPassword(null)
+                .build();
+
+        Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
+        assertFalse(violations.isEmpty(), "Should have validation violations");
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("confirmPassword")));
+    }
+
+    @Test
+    void testEmptyConfirmPassword() {
+        PasswordResetRequest request = PasswordResetRequest.builder()
+                .token("valid-token-123")
+                .newPassword("Test@123")
+                .confirmPassword("")
+                .build();
+
+        Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
+        assertFalse(violations.isEmpty(), "Should have validation violations");
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("confirmPassword")));
     }
 }
