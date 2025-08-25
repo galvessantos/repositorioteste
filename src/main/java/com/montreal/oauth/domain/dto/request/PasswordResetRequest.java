@@ -19,10 +19,6 @@ public class PasswordResetRequest {
 
     @NotBlank(message = "Nova senha é obrigatória")
     @Size(min = 4, max = 8, message = "A senha deve ter entre 4 e 8 caracteres")
-    @Pattern(
-        regexp = "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[_@#])[a-zA-Z\\d_@#]+$",
-        message = "A senha deve conter pelo menos 1 letra maiúscula, 1 minúscula, 1 número e 1 caractere especial (_ @ #)"
-    )
     private String newPassword;
 
     @NotBlank(message = "Confirmação de senha é obrigatória")

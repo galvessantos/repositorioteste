@@ -89,7 +89,8 @@ class PasswordResetRequestTest {
     void testPasswordTooShort() {
         PasswordResetRequest request = PasswordResetRequest.builder()
                 .token("valid-token-123")
-                .newPassword("Ab@1")
+                .newPassword("Ab@")
+                .confirmPassword("Ab@")
                 .build();
 
         Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
@@ -102,54 +103,7 @@ class PasswordResetRequestTest {
         PasswordResetRequest request = PasswordResetRequest.builder()
                 .token("valid-token-123")
                 .newPassword("Ab@12345")
-                .build();
-
-        Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
-        assertFalse(violations.isEmpty(), "Should have validation violations");
-        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("newPassword")));
-    }
-
-    @Test
-    void testPasswordWithoutLowerCase() {
-        PasswordResetRequest request = PasswordResetRequest.builder()
-                .token("valid-token-123")
-                .newPassword("TEST@12")
-                .build();
-
-        Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
-        assertFalse(violations.isEmpty(), "Should have validation violations");
-        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("newPassword")));
-    }
-
-    @Test
-    void testPasswordWithoutUpperCase() {
-        PasswordResetRequest request = PasswordResetRequest.builder()
-                .token("valid-token-123")
-                .newPassword("test@12")
-                .build();
-
-        Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
-        assertFalse(violations.isEmpty(), "Should have validation violations");
-        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("newPassword")));
-    }
-
-    @Test
-    void testPasswordWithoutNumber() {
-        PasswordResetRequest request = PasswordResetRequest.builder()
-                .token("valid-token-123")
-                .newPassword("Test@ab")
-                .build();
-
-        Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
-        assertFalse(violations.isEmpty(), "Should have validation violations");
-        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("newPassword")));
-    }
-
-    @Test
-    void testPasswordWithoutSpecialCharacter() {
-        PasswordResetRequest request = PasswordResetRequest.builder()
-                .token("valid-token-123")
-                .newPassword("Test123")
+                .confirmPassword("Ab@12345")
                 .build();
 
         Set<ConstraintViolation<PasswordResetRequest>> violations = validator.validate(request);
@@ -164,7 +118,8 @@ class PasswordResetRequestTest {
                 "Abc#45",
                 "Xyz_78",
                 "Pass@1",
-                "User#9"
+                "User#9",
+                "Ab@1"
         };
 
         for (String password : validPasswords) {
@@ -182,15 +137,8 @@ class PasswordResetRequestTest {
     @Test
     void testInvalidPasswords() {
         String[] invalidPasswords = {
-                "test@12",  // sem maiúscula
-                "TEST@12",  // sem minúscula
-                "Test@ab",  // sem número
-                "Test123",  // sem caractere especial
-                "Ab@1",     // muito curto
+                "Ab@",      // muito curto
                 "Ab@12345", // muito longo
-                "Test@12!", // caractere especial não permitido
-                "Test@12$", // caractere especial não permitido
-                "Test@12%", // caractere especial não permitido
         };
 
         for (String password : invalidPasswords) {
