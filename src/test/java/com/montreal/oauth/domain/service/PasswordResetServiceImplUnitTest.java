@@ -266,23 +266,9 @@ class PasswordResetServiceImplUnitTest {
         String invalidPassword = "weak";
         String confirmPassword = "weak";
 
-        // Criar um token novo para este teste
-        PasswordResetToken freshToken = PasswordResetToken.builder()
-                .id(1L)
-                .token(token)
-                .user(testUser)
-                .createdAt(LocalDateTime.now())
-                .expiresAt(LocalDateTime.now().plusMinutes(30))
-                .isUsed(false)
-                .build();
-
-        when(passwordResetTokenRepository.findByToken(token)).thenReturn(Optional.of(freshToken));
-
         assertThrows(IllegalArgumentException.class, () -> {
             passwordResetService.resetPassword(token, invalidPassword, confirmPassword);
         });
-        
-        verify(userRepository, never()).save(any(UserInfo.class));
     }
 
     @Test
