@@ -9,6 +9,8 @@ Este projeto implementa uma API completa para redefinição de senha com as segu
 - ✅ **Redefinir senha** - Altera a senha com validações
 - ✅ **Segurança** - Tokens únicos, expiração, invalidação automática
 
+**Importante:** A validação é feita **APENAS pelo login (username)**, não por email. O email será usado apenas para envio do link de redefinição.
+
 ## 🔗 Endpoints Disponíveis
 
 | Método | Endpoint | Descrição |
@@ -37,7 +39,7 @@ http://localhost:8080/api/auth/password-reset
 # Solicitar redefinição
 curl -X POST http://localhost:8080/api/auth/password-reset/generate \
   -H "Content-Type: application/json" \
-  -d '{"login": "usuario@exemplo.com"}'
+  -d '{"login": "usuario123"}'
 
 # Validar token
 curl "http://localhost:8080/api/auth/password-reset/validate?token=seu-token-aqui"
@@ -111,6 +113,8 @@ import { ForgotPasswordModal } from './components/ForgotPasswordModal';
 />
 ```
 
+**Campo:** Apenas login (username), não email.
+
 ### Formulário de Redefinição
 ```typescript
 import { PasswordResetForm } from './components/PasswordResetForm';
@@ -148,9 +152,9 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 ## 📱 Fluxo de Usuário
 
 ### 1. Usuário clica em "Esqueci minha senha"
-- Abre modal com campo de login
+- Abre modal com campo de login (username)
 - Usuário digita login e clica em "Enviar"
-- Sistema valida login e gera token
+- Sistema valida se o login existe no sistema
 - **Nota**: E-mail será enviado pelo outro desenvolvedor
 
 ### 2. Usuário recebe e-mail e clica no link
@@ -215,7 +219,7 @@ test('should submit form with valid login', async () => {
   const loginInput = screen.getByPlaceholderText('Digite seu login');
   const submitButton = screen.getByText('Enviar');
   
-  fireEvent.change(loginInput, { target: { value: 'test@example.com' } });
+  fireEvent.change(loginInput, { target: { value: 'usuario123' } });
   fireEvent.click(submitButton);
   
   await waitFor(() => {
@@ -223,6 +227,8 @@ test('should submit form with valid login', async () => {
   });
 });
 ```
+
+**Nota:** O teste usa `usuario123` como exemplo de login (username), não email.
 
 ## 📞 Suporte
 

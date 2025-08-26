@@ -41,8 +41,8 @@ public class PasswordResetController {
                 Gera um token único para redefinição de senha e retorna um link de redefinição.
                 
                 **Fluxo:**
-                1. Usuário informa o login (username ou email)
-                2. Sistema valida se o login existe
+                1. Usuário informa o login (username)
+                2. Sistema valida se o login existe no sistema
                 3. Se válido, gera token único com expiração de 30 minutos
                 4. Retorna link para redefinição
                 
@@ -50,6 +50,7 @@ public class PasswordResetController {
                 - Tokens existentes do usuário são invalidados automaticamente
                 - O link gerado deve ser enviado por e-mail (implementação separada)
                 - Token expira em 30 minutos por padrão
+                - Validação é feita APENAS pelo login (username), não por email
                 """
     )
     @ApiResponses(value = {

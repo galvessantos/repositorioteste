@@ -4,6 +4,8 @@
 
 Este documento fornece exemplos práticos de como integrar o frontend com a API de redefinição de senha.
 
+**Importante:** A validação é feita **APENAS pelo login (username)**, não por email. O email será usado apenas para envio do link de redefinição.
+
 ## Estrutura de Arquivos Recomendada
 
 ```
@@ -24,7 +26,7 @@ src/
 ### `src/types/passwordReset.types.ts`
 ```typescript
 export interface PasswordResetGenerateRequest {
-  login: string;
+  login: string; // APENAS username, não email
 }
 
 export interface PasswordResetGenerateResponse {
@@ -302,7 +304,7 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({ isOpen
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="login" className="block text-sm font-medium text-gray-700 mb-1">
-              Login (usuário ou e-mail)
+              Login (username)
             </label>
             <input
               type="text"
@@ -642,7 +644,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ForgotPasswordModal } from './ForgotPasswordModal';
 
 describe('ForgotPasswordModal', () => {
-  it('should submit form with valid login', async () => {
+  test('should submit form with valid login', async () => {
     const mockOnClose = jest.fn();
     
     render(<ForgotPasswordModal isOpen={true} onClose={mockOnClose} />);
@@ -650,7 +652,7 @@ describe('ForgotPasswordModal', () => {
     const loginInput = screen.getByPlaceholderText('Digite seu login');
     const submitButton = screen.getByText('Enviar');
     
-    fireEvent.change(loginInput, { target: { value: 'test@example.com' } });
+    fireEvent.change(loginInput, { target: { value: 'usuario123' } });
     fireEvent.click(submitButton);
     
     await waitFor(() => {

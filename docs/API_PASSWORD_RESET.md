@@ -4,6 +4,8 @@
 
 Esta API permite que usuários solicitem redefinição de senha, validem tokens e redefinam suas senhas de forma segura.
 
+**Importante:** A validação é feita **APENAS pelo login (username)**, não por email. O email será usado apenas para envio do link de redefinição.
+
 ## Base URL
 
 ```
@@ -18,10 +20,12 @@ http://localhost:8080/api/auth/password-reset
 
 Gera um token único para redefinição de senha e retorna um link de redefinição.
 
+**Validação:** Apenas pelo login (username) do usuário.
+
 #### Request Body
 ```json
 {
-  "login": "usuario@exemplo.com"
+  "login": "usuario123"
 }
 ```
 

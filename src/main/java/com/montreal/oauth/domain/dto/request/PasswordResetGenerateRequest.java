@@ -24,8 +24,8 @@ import lombok.NoArgsConstructor;
 public class PasswordResetGenerateRequest {
 
     @Schema(
-        description = "Login do usuário (username ou email)",
-        example = "usuario@exemplo.com",
+        description = "Login do usuário (username)",
+        example = "usuario123",
         requiredMode = Schema.RequiredMode.REQUIRED
     )
     @NotBlank(message = "Login is required")
