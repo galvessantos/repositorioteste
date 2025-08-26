@@ -680,3 +680,139 @@ describe('ForgotPasswordModal', () => {
 - Implemente retry automático para falhas de rede
 
 Esta implementação fornece uma base sólida para a integração com a API de redefinição de senha, com tratamento de erros, validações em tempo real e uma experiência de usuário fluida.
+
+### 3. Redefinição de Senha com Login Automático
+```typescript
+const handlePasswordReset = async (token: string, newPassword: string, confirmPassword: string) => {
+  try {
+    const response = await passwordResetService.resetPassword({
+      token,
+      newPassword,
+      confirmPassword
+    });
+
+    if (response.success) {
+      // 🎯 LOGIN AUTOMÁTICO - Usuário já está autenticado!
+      const { accessToken, refreshToken, expiresIn } = response;
+      
+      // Salvar tokens no localStorage ou estado da aplicação
+      localStorage.setItem('accessToken', accessToken);
+      localStorage.setItem('refreshToken', refreshToken);
+      localStorage.setItem('tokenExpiresIn', expiresIn.toString());
+      
+      // Configurar header de autorização para todas as requisições
+      axios.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
+      
+      // Mostrar sucesso e redirecionar para tela principal
+      showSuccess('Senha redefinida com sucesso! Você já está logado no sistema.');
+      
+      // Redirecionar para tela principal (já autenticado)
+      navigate('/dashboard');
+      
+    } else {
+      // Mostrar erro específico
+      showError(response.message);
+    }
+  } catch (error) {
+    showError('Erro ao redefinir senha');
+  }
+};
+```
+
+## 🎯 **Login Automático - Como Funciona**
+
+### **1. Fluxo Tradicional (ANTES):**
+```
+Usuário redefine senha → Sucesso → Redireciona para login → Usuário faz login novamente
+```
+
+### **2. Fluxo com Login Automático (AGORA):**
+```
+Usuário redefine senha → Sucesso → Recebe tokens JWT → Acesso direto ao sistema
+```
+
+### **3. Benefícios:**
+- ✅ **Experiência fluida** - Usuário não precisa fazer login novamente
+- ✅ **Segurança mantida** - Tokens JWT com expiração
+- ✅ **Acesso imediato** - Pode usar o sistema logo após redefinição
+- ✅ **Refresh automático** - Token de refresh para renovar acesso
+
+### **4. Implementação no Frontend:**
+
+#### **Configurar Interceptor Axios:**
+```typescript
+// Configurar token automaticamente
+axios.interceptors.request.use((config) => {
+  const token = localStorage.getItem('accessToken');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Renovar token automaticamente
+axios.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (error.response?.status === 401) {
+      const refreshToken = localStorage.getItem('refreshToken');
+      if (refreshToken) {
+        try {
+          const newTokens = await refreshAuthToken(refreshToken);
+          localStorage.setItem('accessToken', newTokens.accessToken);
+          error.config.headers.Authorization = `Bearer ${newTokens.accessToken}`;
+          return axios(error.config);
+        } catch (refreshError) {
+          // Redirecionar para login
+          navigate('/login');
+        }
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+```
+
+#### **Serviço de Autenticação Atualizado:**
+```typescript
+class AuthService {
+  private baseUrl = '/api/auth';
+  
+  // Verificar se usuário está autenticado
+  isAuthenticated(): boolean {
+    const token = localStorage.getItem('accessToken');
+    const expiresIn = localStorage.getItem('tokenExpiresIn');
+    
+    if (!token || !expiresIn) return false;
+    
+    const expirationTime = parseInt(expiresIn) * 1000; // Converter para milissegundos
+    const currentTime = Date.now();
+    
+    return currentTime < expirationTime;
+  }
+  
+  // Fazer logout
+  logout(): void {
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('tokenExpiresIn');
+    delete axios.defaults.headers.common['Authorization'];
+    navigate('/login');
+  }
+  
+  // Renovar token
+  async refreshToken(): Promise<void> {
+    const refreshToken = localStorage.getItem('refreshToken');
+    if (!refreshToken) throw new Error('No refresh token');
+    
+    const response = await axios.post(`${this.baseUrl}/refresh-token`, {
+      refreshToken
+    });
+    
+    const { accessToken, expiresIn } = response.data;
+    localStorage.setItem('accessToken', accessToken);
+    localStorage.setItem('tokenExpiresIn', expiresIn.toString());
+    axios.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
+  }
+}
+```

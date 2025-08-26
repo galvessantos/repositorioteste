@@ -5,6 +5,7 @@ import com.montreal.oauth.domain.entity.UserInfo;
 import com.montreal.core.domain.exception.UserNotFoundException;
 import com.montreal.oauth.domain.repository.IPasswordResetTokenRepository;
 import com.montreal.oauth.domain.repository.IUserRepository;
+import com.montreal.oauth.domain.dto.response.PasswordResetResponse;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,12 +24,16 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
 
     private final IPasswordResetTokenRepository passwordResetTokenRepository;
     private final IUserRepository userRepository;
+    private final JwtService jwtService;
 
     @Value("${app.password-reset.token.expiration-minutes:30}")
     private int tokenExpirationMinutes;
 
     @Value("${app.password-reset.base-url:https://localhost}")
     private String baseUrl;
+
+    @Value("${montreal.oauth.jwtExpirationMs:86400000}")
+    private Long jwtExpirationMs;
 
     @Override
     @Transactional
@@ -115,43 +120,73 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
 
     @Override
     @Transactional
-    public boolean resetPassword(String token, String newPassword, String confirmPassword) {
+    public PasswordResetResponse resetPassword(String token, String newPassword, String confirmPassword) {
         log.info("Attempting to reset password with token: {}", token);
 
         if (!validatePasswordResetToken(token)) {
             log.warn("Invalid or expired token for password reset: {}", token);
-            return false;
+            return PasswordResetResponse.builder()
+                    .message("Token inválido ou expirado")
+                    .success(false)
+                    .build();
         }
 
         Optional<PasswordResetToken> tokenOpt = passwordResetTokenRepository.findByToken(token);
         if (tokenOpt.isEmpty()) {
             log.warn("Token not found for password reset: {}", token);
-            return false;
+            return PasswordResetResponse.builder()
+                    .message("Token inválido ou expirado")
+                    .success(false)
+                    .build();
         }
 
         PasswordResetToken resetToken = tokenOpt.get();
         UserInfo user = resetToken.getUser();
 
-        validatePassword(newPassword);
+        try {
+            validatePassword(newPassword);
+            validatePasswordConfirmation(newPassword, confirmPassword);
 
-        validatePasswordConfirmation(newPassword, confirmPassword);
+            BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
+            String encodedPassword = encoder.encode(newPassword);
 
-        BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
-        String encodedPassword = encoder.encode(newPassword);
+            user.setPassword(encodedPassword);
+            user.setPasswordChangedByUser(true);
+            user.setEnabled(true);
 
-        user.setPassword(encodedPassword);
-        user.setPasswordChangedByUser(true);
-        user.setEnabled(true);
+            userRepository.save(user);
 
-        userRepository.save(user);
+            markTokenAsUsed(token);
 
-        markTokenAsUsed(token);
+            // Gerar tokens de autenticação
+            String accessToken = jwtService.generateToken(user);
+            String refreshToken = jwtService.generateRefreshToken(user);
 
-        log.info("Password reset successfully for user: {}", user.getUsername());
-        return true;
+            log.info("Password reset successfully for user: {}", user.getUsername());
+
+            return PasswordResetResponse.builder()
+                    .message("Senha redefinida com sucesso")
+                    .success(true)
+                    .accessToken(accessToken)
+                    .refreshToken(refreshToken)
+                    .tokenType("Bearer")
+                    .expiresIn(jwtExpirationMs / 1000) // Converter para segundos
+                    .build();
+
+        } catch (IllegalArgumentException e) {
+            log.warn("Password validation failed: {}", e.getMessage());
+            return PasswordResetResponse.builder()
+                    .message(e.getMessage())
+                    .success(false)
+                    .build();
+        } catch (Exception e) {
+            log.error("Error during password reset", e);
+            return PasswordResetResponse.builder()
+                    .message("Erro interno do servidor")
+                    .success(false)
+                    .build();
+        }
     }
-
-
 
     private void invalidateExistingTokens(Long userId) {
         LocalDateTime now = LocalDateTime.now();

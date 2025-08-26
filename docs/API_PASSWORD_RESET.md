@@ -83,7 +83,7 @@ Valida se um token de redefinição de senha é válido e não expirou.
 
 **POST** `/reset`
 
-Redefine a senha do usuário usando um token válido.
+Redefine a senha do usuário usando um token válido e **retorna tokens de autenticação para login automático**.
 
 #### Request Body
 ```json
@@ -94,19 +94,33 @@ Redefine a senha do usuário usando um token válido.
 }
 ```
 
-#### Response (200 - Sucesso)
+#### Response (200 - Sucesso com Login Automático)
 ```json
 {
   "message": "Senha redefinida com sucesso",
-  "success": true
+  "success": true,
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "tokenType": "Bearer",
+  "expiresIn": 86400
 }
 ```
+
+**🎯 Login Automático:**
+- Após redefinição bem-sucedida, o usuário recebe tokens JWT válidos
+- Pode acessar o sistema diretamente **sem fazer login novamente**
+- Tokens têm validade padrão de 24 horas (86400 segundos)
+- Use o `accessToken` no header `Authorization: Bearer {token}`
 
 #### Response (400 - Validação falhou)
 ```json
 {
-  "message": "A senha deve conter pelo menos uma letra maiúscula",
-  "success": false
+  "message": "As senhas não coincidem",
+  "success": false,
+  "accessToken": null,
+  "refreshToken": null,
+  "tokenType": null,
+  "expiresIn": null
 }
 ```
 
@@ -114,7 +128,11 @@ Redefine a senha do usuário usando um token válido.
 ```json
 {
   "message": "Token inválido ou expirado",
-  "success": false
+  "success": false,
+  "accessToken": null,
+  "refreshToken": null,
+  "tokenType": null,
+  "expiresIn": null
 }
 ```
 

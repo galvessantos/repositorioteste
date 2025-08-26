@@ -1,6 +1,7 @@
 package com.montreal.oauth.domain.service;
 
 import com.montreal.oauth.domain.entity.PasswordResetToken;
+import com.montreal.oauth.domain.dto.response.PasswordResetResponse;
 
 import java.util.Optional;
 
@@ -8,7 +9,7 @@ public interface IPasswordResetService {
 
     /**
      * Generates a password reset token for the given login
-     * @param login User's login (username or email)
+     * @param login User's login (username)
      * @return Generated reset link with token
      */
     String generatePasswordResetToken(String login);
@@ -39,11 +40,11 @@ public interface IPasswordResetService {
     void cleanupExpiredTokens();
 
     /**
-     * Resets the user's password using a valid token
+     * Resets the user's password using a valid token and returns authentication data
      * @param token The password reset token
      * @param newPassword The new password to set
      * @param confirmPassword The password confirmation
-     * @return true if password was reset successfully, false otherwise
+     * @return PasswordResetResponse with authentication tokens if successful
      */
-    boolean resetPassword(String token, String newPassword, String confirmPassword);
+    PasswordResetResponse resetPassword(String token, String newPassword, String confirmPassword);
 }

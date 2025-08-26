@@ -281,21 +281,31 @@ public class PasswordResetController {
                 4. Criptografa e salva a nova senha
                 5. Marca o token como usado
                 6. Ativa a conta do usuário
+                7. **Retorna tokens de autenticação para login automático**
+                
+                **Login Automático:**
+                - Após redefinição bem-sucedida, o usuário recebe tokens JWT
+                - Pode acessar o sistema diretamente sem fazer login novamente
+                - Tokens têm validade padrão de 24 horas
                 """
     )
     @ApiResponses(value = {
             @ApiResponse(
                     responseCode = "200",
-                    description = "Senha redefinida com sucesso",
+                    description = "Senha redefinida com sucesso. Tokens de autenticação retornados para login automático.",
                     content = @Content(
                         schema = @Schema(implementation = PasswordResetResponse.class),
                         examples = @ExampleObject(
-                            name = "Sucesso",
-                            summary = "Senha alterada com sucesso",
+                            name = "Sucesso com Login Automático",
+                            summary = "Senha alterada e usuário autenticado",
                             value = """
                                 {
                                   "message": "Senha redefinida com sucesso",
-                                  "success": true
+                                  "success": true,
+                                  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                                  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                                  "tokenType": "Bearer",
+                                  "expiresIn": 86400
                                 }
                                 """
                         )
@@ -312,7 +322,11 @@ public class PasswordResetController {
                                 value = """
                                     {
                                       "message": "As senhas não coincidem",
-                                      "success": false
+                                      "success": false,
+                                      "accessToken": null,
+                                      "refreshToken": null,
+                                      "tokenType": null,
+                                      "expiresIn": null
                                     }
                                     """
                             ),
@@ -322,7 +336,11 @@ public class PasswordResetController {
                                 value = """
                                     {
                                       "message": "A senha deve conter pelo menos uma letra maiúscula",
-                                      "success": false
+                                      "success": false,
+                                      "accessToken": null,
+                                      "refreshToken": null,
+                                      "tokenType": null,
+                                      "expiresIn": null
                                     }
                                     """
                             )
@@ -340,7 +358,11 @@ public class PasswordResetController {
                             value = """
                                 {
                                   "message": "Token inválido ou expirado",
-                                  "success": false
+                                  "success": false,
+                                  "accessToken": null,
+                                  "refreshToken": null,
+                                  "tokenType": null,
+                                  "expiresIn": null
                                 }
                                 """
                         )
@@ -355,33 +377,19 @@ public class PasswordResetController {
         log.info("Attempting to reset password with token: {}", request.getToken());
 
         try {
-            boolean success = passwordResetService.resetPassword(request.getToken(), request.getNewPassword(), request.getConfirmPassword());
+            PasswordResetResponse response = passwordResetService.resetPassword(
+                request.getToken(), 
+                request.getNewPassword(), 
+                request.getConfirmPassword()
+            );
 
-            if (success) {
-                PasswordResetResponse response = PasswordResetResponse.builder()
-                        .message("Senha redefinida com sucesso")
-                        .success(true)
-                        .build();
-
-                log.info("Password reset completed successfully");
+            if (response.isSuccess()) {
+                log.info("Password reset completed successfully with authentication tokens");
                 return ResponseEntity.ok(response);
             } else {
-                PasswordResetResponse response = PasswordResetResponse.builder()
-                        .message("Token inválido ou expirado")
-                        .success(false)
-                        .build();
-
-                log.warn("Password reset failed - invalid or expired token");
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+                log.warn("Password reset failed: {}", response.getMessage());
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
             }
-
-        } catch (IllegalArgumentException e) {
-            log.warn("Password validation failed: {}", e.getMessage());
-            PasswordResetResponse response = PasswordResetResponse.builder()
-                    .message(e.getMessage())
-                    .success(false)
-                    .build();
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
 
         } catch (Exception e) {
             log.error("Error during password reset", e);
