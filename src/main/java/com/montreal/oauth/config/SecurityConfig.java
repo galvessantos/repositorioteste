@@ -136,11 +136,19 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                // Endpoints públicos
-                .requestMatchers("/api/v1/auth/**").permitAll()
-                .requestMatchers("/api/auth/password-reset/**").permitAll()
-                .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-resources/**", "/webjars/**").permitAll()
+                // Swagger e documentação - PERMITIR ACESSO PÚBLICO
+                .requestMatchers("/swagger-ui.html").permitAll()
+                .requestMatchers("/swagger-ui/**").permitAll()
+                .requestMatchers("/v3/api-docs/**").permitAll()
+                .requestMatchers("/swagger-resources/**").permitAll()
+                .requestMatchers("/webjars/**").permitAll()
                 .requestMatchers("/actuator/**").permitAll()
+                // Endpoints de teste
+                .requestMatchers("/api/test/**").permitAll()
+                // Endpoints de autenticação
+                .requestMatchers("/api/v1/auth/**").permitAll()
+                .requestMatchers("/api/auth/**").permitAll()
+                .requestMatchers("/api/auth/password-reset/**").permitAll()
                 // Todo o resto exige autenticação
                 .anyRequest().authenticated()
             )
