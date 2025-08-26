@@ -103,12 +103,6 @@ public class UserController {
         }
     }
 
-    @Operation(summary = "Alterar senha do usuário")
-    @PatchMapping("/auth/user/{id}/password")
-    public UserResponse changePassword(@PathVariable Long id, @RequestBody @Valid PasswordChangeRequest passwordChangeRequest) {
-        return userService.changePassword(id, passwordChangeRequest.getNewPassword());
-    }
-    
     @Operation(summary = "Obter usuário por ID")
     @GetMapping("/auth/user/{id}")
     public ResponseEntity<UserResponse> getUserById(@PathVariable Long id) {
@@ -265,7 +259,6 @@ public class UserController {
             MessageResponse msgResponse = userService.messageList("erros", objects, MessageTypeEnum.MSG_BAD_REQUEST, "A senha está mal formatada ou não foi informada!");
             return new ResponseEntity<>(msgResponse, HttpStatusCode.valueOf(msgResponse.getStatus()));
         } else {
-            // Verificar e atualizar a senha com BCrypt
             String encodedPassword = passwordEncoder.encode(checkPassword.getPassword());
             MessageResponse msgResponse = userService.passwordReset(encodedPassword, checkPassword.getEmail(), checkPassword.getLink());
             return new ResponseEntity<>(msgResponse, HttpStatusCode.valueOf(msgResponse.getStatus()));

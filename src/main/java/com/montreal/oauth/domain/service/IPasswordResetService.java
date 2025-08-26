@@ -37,4 +37,13 @@ public interface IPasswordResetService {
      * Cleans up expired and used tokens
      */
     void cleanupExpiredTokens();
+
+    /**
+     * Resets the user's password using a valid token
+     * @param token The password reset token
+     * @param newPassword The new password to set
+     * @param confirmPassword The password confirmation
+     * @return true if password was reset successfully, false otherwise
+     */
+    boolean resetPassword(String token, String newPassword, String confirmPassword);
 }
