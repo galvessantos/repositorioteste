@@ -5,6 +5,7 @@ import com.montreal.oauth.domain.dto.request.PasswordResetRequest;
 import com.montreal.oauth.domain.dto.response.PasswordResetGenerateResponse;
 import com.montreal.oauth.domain.dto.response.PasswordResetResponse;
 import com.montreal.oauth.domain.dto.response.PasswordResetValidateResponse;
+import com.montreal.oauth.domain.dto.response.ResetPasswordResult;
 import com.montreal.oauth.domain.service.IPasswordResetService;
 import com.montreal.core.domain.exception.UserNotFoundException;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -355,33 +356,32 @@ public class PasswordResetController {
         log.info("Attempting to reset password with token: {}", request.getToken());
 
         try {
-            boolean success = passwordResetService.resetPassword(request.getToken(), request.getNewPassword(), request.getConfirmPassword());
+            ResetPasswordResult result = passwordResetService.resetPasswordWithTokens(
+                    request.getToken(),
+                    request.getNewPassword(),
+                    request.getConfirmPassword()
+            );
 
-            if (success) {
+            if (result.isSuccess()) {
                 PasswordResetResponse response = PasswordResetResponse.builder()
-                        .message("Senha redefinida com sucesso")
+                        .message(result.getMessage())
                         .success(true)
+                        .accessToken(result.getAccessToken())
+                        .refreshToken(result.getRefreshToken())
+                        .userDetails(result.getUserDetails())
                         .build();
 
-                log.info("Password reset completed successfully");
+                log.info("Password reset completed successfully with auto-login: {}",
+                        result.getAccessToken() != null);
                 return ResponseEntity.ok(response);
             } else {
                 PasswordResetResponse response = PasswordResetResponse.builder()
-                        .message("Token inválido ou expirado")
+                        .message(result.getMessage())
                         .success(false)
                         .build();
 
-                log.warn("Password reset failed - invalid or expired token");
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
             }
-
-        } catch (IllegalArgumentException e) {
-            log.warn("Password validation failed: {}", e.getMessage());
-            PasswordResetResponse response = PasswordResetResponse.builder()
-                    .message(e.getMessage())
-                    .success(false)
-                    .build();
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
 
         } catch (Exception e) {
             log.error("Error during password reset", e);

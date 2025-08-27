@@ -1,10 +1,16 @@
 package com.montreal.oauth.domain.service;
 
+import com.montreal.oauth.domain.dto.response.LoginResponseDTO;
+import com.montreal.oauth.domain.dto.response.ResetPasswordResult;
 import com.montreal.oauth.domain.entity.PasswordResetToken;
+import com.montreal.oauth.domain.entity.RefreshToken;
 import com.montreal.oauth.domain.entity.UserInfo;
 import com.montreal.core.domain.exception.UserNotFoundException;
 import com.montreal.oauth.domain.repository.IPasswordResetTokenRepository;
 import com.montreal.oauth.domain.repository.IUserRepository;
+import com.montreal.oauth.domain.enumerations.RoleEnum;
+import com.montreal.msiav_bh.entity.Company;
+import com.montreal.msiav_bh.repository.CompanyRepository;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -23,12 +30,19 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
 
     private final IPasswordResetTokenRepository passwordResetTokenRepository;
     private final IUserRepository userRepository;
+    private final JwtService jwtService;
+    private final RefreshTokenService refreshTokenService;
+    private final CompanyRepository companyRepository;
+    private final UserService userService;
 
     @Value("${app.password-reset.token.expiration-minutes:30}")
     private int tokenExpirationMinutes;
 
     @Value("${app.password-reset.base-url:https://localhost}")
     private String baseUrl;
+
+    @Value("${app.password-reset.auto-login:true}")
+    private boolean autoLoginAfterReset;
 
     @Override
     @Transactional
@@ -116,42 +130,76 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
     @Override
     @Transactional
     public boolean resetPassword(String token, String newPassword, String confirmPassword) {
+        ResetPasswordResult result = resetPasswordWithTokens(token, newPassword, confirmPassword);
+        return result.isSuccess();
+    }
+
+    @Override
+    @Transactional
+    public ResetPasswordResult resetPasswordWithTokens(String token, String newPassword, String confirmPassword) {
         log.info("Attempting to reset password with token: {}", token);
 
         if (!validatePasswordResetToken(token)) {
             log.warn("Invalid or expired token for password reset: {}", token);
-            return false;
+            return ResetPasswordResult.builder()
+                    .success(false)
+                    .message("Token inválido ou expirado")
+                    .build();
         }
 
         Optional<PasswordResetToken> tokenOpt = passwordResetTokenRepository.findByToken(token);
         if (tokenOpt.isEmpty()) {
             log.warn("Token not found for password reset: {}", token);
-            return false;
+            return ResetPasswordResult.builder()
+                    .success(false)
+                    .message("Token inválido ou expirado")
+                    .build();
         }
 
         PasswordResetToken resetToken = tokenOpt.get();
         UserInfo user = resetToken.getUser();
 
-        validatePassword(newPassword);
+        try {
+            validatePassword(newPassword);
+            validatePasswordConfirmation(newPassword, confirmPassword);
 
-        validatePasswordConfirmation(newPassword, confirmPassword);
+            validatePasswordNotSameAsCurrent(user, newPassword);
 
-        BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
-        String encodedPassword = encoder.encode(newPassword);
+            BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
+            String encodedPassword = encoder.encode(newPassword);
 
-        user.setPassword(encodedPassword);
-        user.setPasswordChangedByUser(true);
-        user.setEnabled(true);
+            user.setPassword(encodedPassword);
+            user.setPasswordChangedByUser(true);
+            user.setEnabled(true);
 
-        userRepository.save(user);
+            userRepository.save(user);
+            markTokenAsUsed(token);
 
-        markTokenAsUsed(token);
+            log.info("Password reset successfully for user: {}", user.getUsername());
 
-        log.info("Password reset successfully for user: {}", user.getUsername());
-        return true;
+            if (autoLoginAfterReset) {
+                return generateAutoLoginTokens(user);
+            } else {
+                return ResetPasswordResult.builder()
+                        .success(true)
+                        .message("Senha redefinida com sucesso")
+                        .build();
+            }
+
+        } catch (IllegalArgumentException e) {
+            log.warn("Password validation failed: {}", e.getMessage());
+            return ResetPasswordResult.builder()
+                    .success(false)
+                    .message(e.getMessage())
+                    .build();
+        } catch (Exception e) {
+            log.error("Error during password reset", e);
+            return ResetPasswordResult.builder()
+                    .success(false)
+                    .message("Erro interno do servidor")
+                    .build();
+        }
     }
-
-
 
     private void invalidateExistingTokens(Long userId) {
         LocalDateTime now = LocalDateTime.now();
@@ -182,6 +230,99 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
 
     private String generateResetLink(String token) {
         return String.format("%s/reset-password?token=%s", baseUrl, token);
+    }
+
+    private ResetPasswordResult generateAutoLoginTokens(UserInfo user) {
+        try {
+            log.info("Generating auto-login tokens for user: {}", user.getUsername());
+
+            user = userService.decryptSensitiveFields(user);
+
+            boolean isAdmin = user.getRoles().stream()
+                    .anyMatch(role -> role.getName() == RoleEnum.ROLE_ADMIN);
+
+            if (!isAdmin && user.getCompanyId() != null) {
+                Company company = companyRepository.findById(Long.valueOf(user.getCompanyId()))
+                        .orElse(null);
+
+                if (company == null || !company.getIsActive()) {
+                    log.warn("Company is inactive for user: {}", user.getUsername());
+                    return ResetPasswordResult.builder()
+                            .success(true)
+                            .message("Senha redefinida com sucesso, mas a empresa está inativa. Contate o administrador.")
+                            .build();
+                }
+            }
+
+            String accessToken = jwtService.GenerateToken(user.getUsername());
+
+            String refreshTokenValue = refreshTokenService.getTokenByUserId(user.getId());
+            if (refreshTokenValue.isEmpty()) {
+                RefreshToken refreshToken = refreshTokenService.createRefreshToken(user.getUsername());
+                refreshTokenValue = refreshToken.getToken();
+            }
+
+            LoginResponseDTO userDetails = buildUserDetails(user, isAdmin);
+
+            log.info("Auto-login tokens generated successfully for user: {}", user.getUsername());
+
+            return ResetPasswordResult.builder()
+                    .success(true)
+                    .message("Senha redefinida com sucesso")
+                    .accessToken(accessToken)
+                    .refreshToken(refreshTokenValue)
+                    .userDetails(userDetails)
+                    .build();
+
+        } catch (Exception e) {
+            log.error("Error generating auto-login tokens for user: {}", user.getUsername(), e);
+            return ResetPasswordResult.builder()
+                    .success(true)
+                    .message("Senha redefinida com sucesso, mas houve erro no login automático. Faça login manualmente.")
+                    .build();
+        }
+    }
+
+    private LoginResponseDTO buildUserDetails(UserInfo user, boolean isAdmin) {
+        LoginResponseDTO.LoginUserDTO userDetails = LoginResponseDTO.LoginUserDTO.builder()
+                .id(user.getId())
+                .username(user.getUsername())
+                .roles(user.getRoles().stream().map(role -> role.getName().name()).toList())
+                .companyId(user.getCompanyId())
+                .enabled(user.isEnabled())
+                .build();
+
+        List<LoginResponseDTO.LoginPermissionDTO> permissions = isAdmin ?
+                List.of(LoginResponseDTO.LoginPermissionDTO.builder()
+                        .action("admin")
+                        .subject("all")
+                        .build()) :
+                user.getRoles().stream()
+                        .flatMap(role -> role.getRolePermissions().stream())
+                        .map(rp -> LoginResponseDTO.LoginPermissionDTO.builder()
+                                .action(rp.getPermission().getAction())
+                                .subject(rp.getPermission().getSubject())
+                                .build())
+                        .distinct()
+                        .toList();
+
+        List<LoginResponseDTO.LoginFunctionalityDTO> functionalities = isAdmin ?
+                List.of(LoginResponseDTO.LoginFunctionalityDTO.builder()
+                        .name("admin")
+                        .build()) :
+                user.getRoles().stream()
+                        .flatMap(role -> role.getRoleFunctionalities().stream())
+                        .map(rf -> LoginResponseDTO.LoginFunctionalityDTO.builder()
+                                .name(rf.getFunctionality().getName())
+                                .build())
+                        .distinct()
+                        .toList();
+
+        return LoginResponseDTO.builder()
+                .user(userDetails)
+                .permissions(permissions)
+                .functionalities(functionalities)
+                .build();
     }
 
     private void validatePassword(String password) {
@@ -222,5 +363,13 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
         }
 
         log.debug("Password confirmation validation passed");
+    }
+
+    private void validatePasswordNotSameAsCurrent(UserInfo user, String newPassword) {
+        BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
+
+        if (encoder.matches(newPassword, user.getPassword())) {
+            throw new IllegalArgumentException("A nova senha não pode ser igual à senha atual");
+        }
     }
 }

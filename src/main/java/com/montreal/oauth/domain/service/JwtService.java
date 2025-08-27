@@ -1,7 +1,6 @@
 package com.montreal.oauth.domain.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.montreal.oauth.domain.entity.UserInfo;
 import com.montreal.oauth.domain.repository.IUserRepository;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
@@ -31,7 +30,6 @@ public class JwtService {
     private final IUserRepository IUserRepository;
     private final ObjectMapper objectMapper;
 
-
     public String extractUsername(String token) {
         return extractClaim(token, Claims::getSubject);
     }
@@ -42,16 +40,13 @@ public class JwtService {
 
     public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
         try {
-
             final Claims claims = extractAllClaims(token);
             return claimsResolver.apply(claims);
-
         } catch (ExpiredJwtException e) {
             throw e;
         } catch (Exception e) {
             throw new RuntimeException("Token inválido", e);
         }
-
     }
 
     private Claims extractAllClaims(String token) {
@@ -73,21 +68,20 @@ public class JwtService {
     }
 
     public String GenerateToken(String username){
-        UserInfo user = IUserRepository.findByUsername(username);
         Map<String, Object> claims = new HashMap<>();
-        claims.put("user", user);
-        return createToken(claims, user.getUsername());
+        claims.put("username", username);
+        return createToken(claims, username);
     }
 
     private String createToken(Map<String, Object> claims, String username) {
-        UserInfo user = IUserRepository.findByUsername(username);
         return Jwts.builder()
                 .serializeToJsonWith(new JacksonSerializer<>(objectMapper))
                 .setClaims(claims)
-                .setSubject(user.getUsername())
+                .setSubject(username)
                 .setIssuedAt(new Date(System.currentTimeMillis()))
-                .setExpiration(new Date(System.currentTimeMillis()+1000*60*60))
-                .signWith(getSignKey(), SignatureAlgorithm.HS256).compact();
+                .setExpiration(new Date(System.currentTimeMillis() + 1000 * 60 * 60))
+                .signWith(getSignKey(), SignatureAlgorithm.HS256)
+                .compact();
     }
 
     private Key getSignKey() {

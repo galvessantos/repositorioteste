@@ -11,7 +11,7 @@ import java.util.Map;
 @Builder
 public class AuthResponseDTO {
 	
-    private UserDetailsDTO user;
+    private Object user;
     private List<PermissionDetailsDTO> permissions;
     private List<FunctionalityDetailsDTO> functionalities;
 
