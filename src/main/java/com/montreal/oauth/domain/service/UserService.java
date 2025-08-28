@@ -39,6 +39,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.modelmapper.ModelMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -87,6 +88,9 @@ public class UserService {
     private final RefreshTokenService refreshTokenService;
     private final AuthenticationManager authenticationManager;
     private final NamedParameterJdbcTemplate namedParameterJdbcTemplate;
+
+    @Autowired(required = false)
+    private PasswordHistoryService passwordHistoryService;
 
     @Transactional
     private UserInfo createAndSaveUser(UserRequest userRequest) {
@@ -199,7 +203,7 @@ public class UserService {
     		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
     		UserDetails userDetail = (UserDetails) authentication.getPrincipal();
     		String usernameFromAccessToken = userDetail.getUsername();
-    		
+
     		Optional<UserInfo> user = userRepository.obterByUsername(usernameFromAccessToken);
     		if (user.isPresent()) {
     			return decryptSensitiveFields(user.get());
@@ -347,7 +351,7 @@ public class UserService {
     @Transactional
     public UserInfo updateUser(Long userId, UserRequest userRequest) {
         try {
-        	
+
             UserInfo existingUser = userRepository.findFirstById(userId);
             if (existingUser == null) {
                 throw new UserNotFoundException("Não é possível encontrar o registro com o identificador: " + userId);
@@ -361,7 +365,7 @@ public class UserService {
             if (!existingUser.getEmail().equals(userRequest.getEmail()) && userRepository.existsByEmail(userRequest.getEmail())) {
                 throw new ConflictUserException(String.format("Usuário com o email '%s' já existe", userRequest.getEmail()));
             }
-            
+
             Set<Role> userRoles = userRequest.getRoles().stream()
             	    .map(roleRequest -> {
                         Role role = new Role();
@@ -383,7 +387,6 @@ public class UserService {
             existingUser.setCompanyId(userRequest.getCompanyId());
             existingUser.setCpf(userRequest.getCpf());
             existingUser.setPhone(userRequest.getPhone());
-            // Save user
             existingUser = encryptSensitiveFields(existingUser);
             return userRepository.save(existingUser);
         } catch (UserNotFoundException | ConflictUserException e) {
@@ -394,14 +397,23 @@ public class UserService {
             throw new InternalErrorException("Falha ao atualizar usuário");
         }
     }
-    
+
     public UserResponse changePassword(Long userId, String newPassword) {
         UserInfo user = getUserById(userId);
 
         validatePassword(newPassword);
 
+        if (passwordHistoryService != null) {
+            passwordHistoryService.validatePasswordHistory(user, newPassword);
+        }
+
         BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
         String encodedNewPassword = encoder.encode(newPassword);
+
+        if (passwordHistoryService != null) {
+            passwordHistoryService.savePasswordToHistory(user, encodedNewPassword);
+        }
+
         user.setPassword(encodedNewPassword);
         user.setPasswordChangedByUser(true);
         user.setEnabled(true);
@@ -455,7 +467,6 @@ public class UserService {
                     token = refreshToken.getToken();
                 }
 
-                // Criando DTO de resposta formatado com usuário
                 AuthResponseDTO.UserDetailsDTO userDetails = AuthResponseDTO.UserDetailsDTO.builder()
                         .id(user.getId())
                         .username(user.getUsername())
@@ -463,7 +474,7 @@ public class UserService {
                         .roles(user.getRoles().stream().map(role -> role.getName().name()).toList())
                         .cpf(user.getCpf())
                         .phone(user.getPhone())
-                        .companyId(user.getCompanyId() != null ? user.getCompanyId().toString() : null)
+                        .companyId(user.getCompanyId() != null ? user.getCompanyId() : null)
                         .link(user.getLink())
                         .tokenTemporary(user.getTokenTemporary())
                         .tokenExpiredAt(user.getTokenExpiredAt())
@@ -477,7 +488,6 @@ public class UserService {
                 List<AuthResponseDTO.FunctionalityDetailsDTO> functionalities;
 
                 if (isAdmin) {
-                    // Se for ADMIN, retorna apenas a permissão e funcionalidade geral
                     permissions = List.of(
                             AuthResponseDTO.PermissionDetailsDTO.builder()
                                     .action("manage")
@@ -495,7 +505,6 @@ public class UserService {
                     );
 
                 } else {
-                    // Se não for admin, carrega as permissões e funcionalidades normais
                     permissions = user.getRoles().stream()
                             .flatMap(role -> role.getRolePermissions().stream())
                             .map(rolePermission -> {
@@ -551,10 +560,10 @@ public class UserService {
     }
 
     private void validateUserCreated(UserRequest userRequest) {
-    	
+
         boolean isAdmin = userRequest.getRoles().stream().anyMatch(role -> role.getName() == RoleEnum.ROLE_ADMIN);
         log.info("Validando usuário. É administrador? {}", isAdmin);
-        
+
         if (userRepository.existsByUsernameIgnoreCase(userRequest.getUsername())) {
             throw new NegocioException(String.format("O username '%s' já está em uso.", userRequest.getUsername()));
         }
@@ -671,7 +680,7 @@ public class UserService {
             throw new UnauthorizedException("Usuário não está autenticado");
         }
     }
-    
+
     public UserInfo encryptSensitiveFields(UserInfo user) {
         if (user == null) {
             return null;
@@ -697,9 +706,9 @@ public class UserService {
         return user;
     }
 
-    
+
     public UserInfo decryptSensitiveFields(UserInfo user) {
-    	
+
         if (user == null) {
             return null;
         }
@@ -722,7 +731,6 @@ public class UserService {
         userCopy.setTokenExpiredAt(user.getTokenExpiredAt());
         userCopy.setEnabled(user.isEnabled());
 
-        // Decriptografar CPF e Phone só na cópia
         if (user.getCpf() != null) {
             try {
                 userCopy.setCpf(postgresCryptoUtil.decrypt(user.getCpf()));
@@ -787,13 +795,11 @@ public class UserService {
             Map<String, String[]> parameterMap = request.getParameterMap();
             Map<String, String> normalizedParams = new HashMap<>();
 
-            // Normaliza as chaves de busca que estao na URL
             for (String key : parameterMap.keySet()) {
                 String normalizedKey = key.equalsIgnoreCase("fullName") ? "fullname" : key.toLowerCase();
                 normalizedParams.put(normalizedKey, request.getParameter(key));
             }
 
-            // Filtros normais
             if (normalizedParams.containsKey("id")) {
                 sql.append("AND id = :id ");
                 countSql.append("AND id = :id ");
@@ -824,7 +830,6 @@ public class UserService {
                 params.put("isEnabled", Boolean.parseBoolean(normalizedParams.get("enabled")));
             }
 
-            // Filtro com CPF criptografado
             if (normalizedParams.containsKey("cpf") && !normalizedParams.get("cpf").isBlank()) {
                 sql.append("AND cpf ~ '^[0-9a-fA-F]+$' ");
                 sql.append("AND descriptografar(decode(cpf, 'hex')) = :cpf ");
@@ -838,7 +843,6 @@ public class UserService {
                     "u.is_password_changed_by_user, u.company_id, u.phone, " +
                     "u.token_temporary, u.token_expired_at ");
 
-            // Ordenação
             if (pageable.getSort().isSorted()) {
                 sql.append("ORDER BY ");
                 String order = pageable.getSort().stream()
@@ -849,12 +853,10 @@ public class UserService {
                 sql.append("ORDER BY id ASC ");
             }
 
-            // Paginação
             sql.append(" LIMIT :limit OFFSET :offset");
             params.put("limit", pageable.getPageSize());
             params.put("offset", pageable.getOffset());
 
-            // Execução
             log.info("Executando query de usuários com SQL: {}", sql);
             List<UserInfo> users = namedParameterJdbcTemplate.query(
                 sql.toString(),
@@ -878,11 +880,12 @@ public class UserService {
                 }
             );
 
-            int total = namedParameterJdbcTemplate.queryForObject(
-                countSql.toString(),
-                new MapSqlParameterSource(params),
-                Integer.class
+            Integer totalResult = namedParameterJdbcTemplate.queryForObject(
+                    countSql.toString(),
+                    new MapSqlParameterSource(params),
+                    Integer.class
             );
+            int total = totalResult != null ? totalResult : 0;
 
             users.forEach(userInfo -> userInfo.getRoles()
                     .forEach(role -> roleRepository.findByName(role.getName())

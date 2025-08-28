@@ -11,6 +11,7 @@ import com.montreal.oauth.domain.repository.IUserRepository;
 import com.montreal.oauth.domain.enumerations.RoleEnum;
 import com.montreal.msiav_bh.entity.Company;
 import com.montreal.msiav_bh.repository.CompanyRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +35,9 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
     private final RefreshTokenService refreshTokenService;
     private final CompanyRepository companyRepository;
     private final UserService userService;
+
+    @Autowired(required = false)
+    private PasswordHistoryService passwordHistoryService;
 
     @Value("${app.password-reset.token.expiration-minutes:30}")
     private int tokenExpirationMinutes;
@@ -162,11 +166,14 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
         try {
             validatePassword(newPassword);
             validatePasswordConfirmation(newPassword, confirmPassword);
-
             validatePasswordNotSameAsCurrent(user, newPassword);
 
             BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
             String encodedPassword = encoder.encode(newPassword);
+
+            if (passwordHistoryService != null) {
+                passwordHistoryService.savePasswordToHistory(user, encodedPassword);
+            }
 
             user.setPassword(encodedPassword);
             user.setPasswordChangedByUser(true);
@@ -370,6 +377,10 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
 
         if (encoder.matches(newPassword, user.getPassword())) {
             throw new IllegalArgumentException("A nova senha não pode ser igual à senha atual");
+        }
+
+        if (passwordHistoryService != null) {
+            passwordHistoryService.validatePasswordHistory(user, newPassword);
         }
     }
 }
