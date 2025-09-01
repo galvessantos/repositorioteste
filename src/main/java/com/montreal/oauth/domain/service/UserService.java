@@ -446,7 +446,7 @@ public class UserService {
                 }
 
                 boolean isAdmin = user.getRoles().stream()
-                        .anyMatch(role -> role.getName() == RoleEnum.ROLE_ADMIN);
+                        .anyMatch(role -> RoleEnum.ROLE_ADMIN.equals(role.getName()));
 
                 if (!isAdmin) {
                     Company company = companyRepository.findById(Long.valueOf(user.getCompanyId()))

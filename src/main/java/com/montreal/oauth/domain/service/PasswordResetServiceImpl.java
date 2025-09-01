@@ -246,7 +246,7 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
             user = userService.decryptSensitiveFields(user);
 
             boolean isAdmin = user.getRoles().stream()
-                    .anyMatch(role -> role.getName() == RoleEnum.ROLE_ADMIN);
+                    .anyMatch(role -> RoleEnum.ROLE_ADMIN.equals(role.getName()));
 
             if (!isAdmin && user.getCompanyId() != null) {
                 Company company = companyRepository.findById(Long.valueOf(user.getCompanyId()))
@@ -301,7 +301,7 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
 
         List<LoginResponseDTO.LoginPermissionDTO> permissions = isAdmin ?
                 List.of(LoginResponseDTO.LoginPermissionDTO.builder()
-                        .action("admin")
+                        .action("manage")
                         .subject("all")
                         .build()) :
                 user.getRoles().stream()
@@ -315,7 +315,7 @@ public class PasswordResetServiceImpl implements IPasswordResetService {
 
         List<LoginResponseDTO.LoginFunctionalityDTO> functionalities = isAdmin ?
                 List.of(LoginResponseDTO.LoginFunctionalityDTO.builder()
-                        .name("admin")
+                        .name("manageAll")
                         .build()) :
                 user.getRoles().stream()
                         .flatMap(role -> role.getRoleFunctionalities().stream())
