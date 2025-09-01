@@ -7,7 +7,6 @@ import com.montreal.oauth.domain.dto.response.PasswordResetGenerateResponse;
 import com.montreal.oauth.domain.dto.response.PasswordResetResponse;
 import com.montreal.oauth.domain.dto.response.PasswordResetValidateResponse;
 import com.montreal.oauth.domain.dto.response.ResetPasswordResult;
-import com.montreal.oauth.domain.dto.response.LoginResponseDTO;
 import com.montreal.oauth.domain.service.IPasswordResetService;
 import com.montreal.core.domain.exception.UserNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,14 +15,15 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
-import java.util.List;
-import java.util.Objects;
-
-import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @ExtendWith(MockitoExtension.class)
 class PasswordResetControllerUnitTest {
@@ -34,369 +34,327 @@ class PasswordResetControllerUnitTest {
     @InjectMocks
     private PasswordResetController passwordResetController;
 
+    private MockMvc mockMvc;
     private ObjectMapper objectMapper;
 
     @BeforeEach
     void setUp() {
+        mockMvc = MockMvcBuilders.standaloneSetup(passwordResetController).build();
         objectMapper = new ObjectMapper();
-        reset(passwordResetService);
     }
 
     @Test
-    void generatePasswordResetToken_ValidLogin_ReturnsSuccess() {
-        String login = "test@example.com";
-        String resetLink = "https://example.com/reset-password?token=uuid-123";
-        PasswordResetGenerateRequest request = new PasswordResetGenerateRequest();
-        request.setLogin(login);
+    void generatePasswordResetToken_ValidRequest_ReturnsOk() throws Exception {
+        // Arrange
+        PasswordResetGenerateRequest request = PasswordResetGenerateRequest.builder()
+                .login("testuser")
+                .build();
 
-        when(passwordResetService.generatePasswordResetToken(login)).thenReturn(resetLink);
+        String resetLink = "https://localhost/reset-password?token=uuid-123";
+        when(passwordResetService.generatePasswordResetToken("testuser")).thenReturn(resetLink);
 
-        ResponseEntity<PasswordResetGenerateResponse> response = passwordResetController.generatePasswordResetToken(request);
+        // Act & Assert
+        mockMvc.perform(post("/api/auth/password-reset/generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Password reset token generated successfully"))
+                .andExpect(jsonPath("$.resetLink").value(resetLink));
 
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals("Password reset token generated successfully", response.getBody().getMessage());
-        assertEquals(resetLink, response.getBody().getResetLink());
-
-        verify(passwordResetService).generatePasswordResetToken(login);
+        verify(passwordResetService).generatePasswordResetToken("testuser");
     }
 
     @Test
-    void generatePasswordResetToken_InvalidLogin_ThrowsUserNotFoundException() {
-        String login = "invalid@example.com";
-        PasswordResetGenerateRequest request = new PasswordResetGenerateRequest();
-        request.setLogin(login);
+    void generatePasswordResetToken_UserNotFound_ReturnsNotFound() throws Exception {
+        // Arrange
+        PasswordResetGenerateRequest request = PasswordResetGenerateRequest.builder()
+                .login("nonexistent")
+                .build();
 
-        when(passwordResetService.generatePasswordResetToken(login))
+        when(passwordResetService.generatePasswordResetToken("nonexistent"))
                 .thenThrow(new UserNotFoundException("Login informado inválido"));
 
-        ResponseEntity<PasswordResetGenerateResponse> response = passwordResetController.generatePasswordResetToken(request);
+        // Act & Assert
+        mockMvc.perform(post("/api/auth/password-reset/generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message").value("Login informado inválido"))
+                .andExpect(jsonPath("$.resetLink").isEmpty());
 
-        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals("Login informado inválido", response.getBody().getMessage());
-        assertNull(response.getBody().getResetLink());
-
-        verify(passwordResetService).generatePasswordResetToken(login);
+        verify(passwordResetService).generatePasswordResetToken("nonexistent");
     }
 
     @Test
-    void generatePasswordResetToken_GenericException_ThrowsException() {
-        String login = "test@example.com";
-        PasswordResetGenerateRequest request = new PasswordResetGenerateRequest();
-        request.setLogin(login);
+    void generatePasswordResetToken_InvalidRequest_ReturnsBadRequest() throws Exception {
+        // Arrange
+        PasswordResetGenerateRequest request = PasswordResetGenerateRequest.builder()
+                .login("") // Invalid empty login
+                .build();
 
-        when(passwordResetService.generatePasswordResetToken(login))
+        // Act & Assert
+        mockMvc.perform(post("/api/auth/password-reset/generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+
+        verify(passwordResetService, never()).generatePasswordResetToken(anyString());
+    }
+
+    @Test
+    void generatePasswordResetToken_ServiceException_ThrowsException() throws Exception {
+        // Arrange
+        PasswordResetGenerateRequest request = PasswordResetGenerateRequest.builder()
+                .login("testuser")
+                .build();
+
+        when(passwordResetService.generatePasswordResetToken("testuser"))
                 .thenThrow(new RuntimeException("Database error"));
 
-        assertThrows(RuntimeException.class, () -> {
-            passwordResetController.generatePasswordResetToken(request);
-        });
+        // Act & Assert
+        mockMvc.perform(post("/api/auth/password-reset/generate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isInternalServerError());
 
-        verify(passwordResetService).generatePasswordResetToken(login);
+        verify(passwordResetService).generatePasswordResetToken("testuser");
     }
 
     @Test
-    void validatePasswordResetToken_ValidToken_ReturnsSuccess() {
-        String token = "valid-token-123";
+    void validatePasswordResetToken_ValidToken_ReturnsValid() throws Exception {
+        // Arrange
+        String token = "valid-token";
         when(passwordResetService.validatePasswordResetToken(token)).thenReturn(true);
 
-        ResponseEntity<PasswordResetValidateResponse> response = passwordResetController.validatePasswordResetToken(token);
-
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertTrue(response.getBody().isValid());
-        assertEquals("Token is valid", response.getBody().getMessage());
+        // Act & Assert
+        mockMvc.perform(get("/api/auth/password-reset/validate")
+                        .param("token", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(true))
+                .andExpect(jsonPath("$.message").value("Token is valid"));
 
         verify(passwordResetService).validatePasswordResetToken(token);
     }
 
     @Test
-    void validatePasswordResetToken_InvalidToken_ReturnsFalse() {
-        String token = "invalid-token-123";
+    void validatePasswordResetToken_InvalidToken_ReturnsInvalid() throws Exception {
+        // Arrange
+        String token = "invalid-token";
         when(passwordResetService.validatePasswordResetToken(token)).thenReturn(false);
 
-        ResponseEntity<PasswordResetValidateResponse> response = passwordResetController.validatePasswordResetToken(token);
-
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertFalse(response.getBody().isValid());
-        assertEquals("Token is invalid or expired", response.getBody().getMessage());
+        // Act & Assert
+        mockMvc.perform(get("/api/auth/password-reset/validate")
+                        .param("token", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(false))
+                .andExpect(jsonPath("$.message").value("Token is invalid or expired"));
 
         verify(passwordResetService).validatePasswordResetToken(token);
     }
 
     @Test
-    void cleanupExpiredTokens_Success() {
-        ResponseEntity<String> response = passwordResetController.cleanupExpiredTokens();
+    void validatePasswordResetToken_MissingToken_ReturnsBadRequest() throws Exception {
+        // Act & Assert
+        mockMvc.perform(get("/api/auth/password-reset/validate"))
+                .andExpect(status().isBadRequest());
 
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertEquals("Cleanup completed successfully", response.getBody());
+        verify(passwordResetService, never()).validatePasswordResetToken(anyString());
+    }
+
+    @Test
+    void validatePasswordResetToken_ServiceException_ThrowsException() throws Exception {
+        // Arrange
+        String token = "test-token";
+        when(passwordResetService.validatePasswordResetToken(token))
+                .thenThrow(new RuntimeException("Database error"));
+
+        // Act & Assert
+        mockMvc.perform(get("/api/auth/password-reset/validate")
+                        .param("token", token))
+                .andExpect(status().isInternalServerError());
+
+        verify(passwordResetService).validatePasswordResetToken(token);
+    }
+
+    @Test
+    void cleanupExpiredTokens_Success_ReturnsOk() throws Exception {
+        // Arrange
+        doNothing().when(passwordResetService).cleanupExpiredTokens();
+
+        // Act & Assert
+        mockMvc.perform(post("/api/auth/password-reset/cleanup"))
+                .andExpect(status().isOk())
+                .andExpect(content().string("Cleanup completed successfully"));
 
         verify(passwordResetService).cleanupExpiredTokens();
     }
 
     @Test
-    void cleanupExpiredTokens_ThrowsException() {
-        doThrow(new RuntimeException("Database error"))
-                .when(passwordResetService).cleanupExpiredTokens();
+    void cleanupExpiredTokens_ServiceException_ThrowsException() throws Exception {
+        // Arrange
+        doThrow(new RuntimeException("Database error")).when(passwordResetService).cleanupExpiredTokens();
 
-        assertThrows(RuntimeException.class, () -> {
-            passwordResetController.cleanupExpiredTokens();
-        });
+        // Act & Assert
+        mockMvc.perform(post("/api/auth/password-reset/cleanup"))
+                .andExpect(status().isInternalServerError());
 
         verify(passwordResetService).cleanupExpiredTokens();
     }
 
     @Test
-    void resetPassword_ValidRequest_ReturnsSuccessWithAutoLogin() {
-        String token = "valid-token-123";
-        String newPassword = "Test@123";
-        String confirmPassword = "Test@123";
+    void resetPassword_ValidRequest_ReturnsOk() throws Exception {
+        // Arrange
         PasswordResetRequest request = PasswordResetRequest.builder()
-                .token(token)
-                .newPassword(newPassword)
-                .confirmPassword(confirmPassword)
+                .token("valid-token")
+                .newPassword("Test@123")
+                .confirmPassword("Test@123")
                 .build();
 
-        ResetPasswordResult mockResult = ResetPasswordResult.builder()
-                .success(true)
-                .message("Senha redefinida com sucesso")
-                .accessToken("eyJhbGciOiJIUzI1NiJ9...")
-                .refreshToken("refresh-token-123")
-                .userDetails(createMockLoginResponseDTO())
-                .build();
-
-        when(passwordResetService.resetPasswordWithTokens(token, newPassword, confirmPassword))
-                .thenReturn(mockResult);
-
-        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
-
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertTrue(Objects.requireNonNull(response.getBody()).isSuccess());
-        assertEquals("Senha redefinida com sucesso", response.getBody().getMessage());
-        assertNotNull(response.getBody().getAccessToken());
-        assertNotNull(response.getBody().getRefreshToken());
-        assertNotNull(response.getBody().getUserDetails());
-
-        verify(passwordResetService).resetPasswordWithTokens(token, newPassword, confirmPassword);
-    }
-
-    @Test
-    void resetPassword_ValidRequestWithoutAutoLogin_ReturnsSuccess() {
-        String token = "valid-token-123";
-        String newPassword = "Test@123";
-        String confirmPassword = "Test@123";
-        PasswordResetRequest request = PasswordResetRequest.builder()
-                .token(token)
-                .newPassword(newPassword)
-                .confirmPassword(confirmPassword)
-                .build();
-
-        ResetPasswordResult mockResult = ResetPasswordResult.builder()
+        ResetPasswordResult result = ResetPasswordResult.builder()
                 .success(true)
                 .message("Senha redefinida com sucesso")
                 .build();
 
-        when(passwordResetService.resetPasswordWithTokens(token, newPassword, confirmPassword))
-                .thenReturn(mockResult);
+        when(passwordResetService.resetPasswordWithTokens("valid-token", "Test@123", "Test@123"))
+                .thenReturn(result);
 
-        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
+        // Act & Assert
+        mockMvc.perform(post("/api/auth/password-reset/reset")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Senha redefinida com sucesso"))
+                .andExpect(jsonPath("$.success").value(true));
 
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertTrue(Objects.requireNonNull(response.getBody()).isSuccess());
-        assertEquals("Senha redefinida com sucesso", response.getBody().getMessage());
-        assertNull(response.getBody().getAccessToken());
-        assertNull(response.getBody().getRefreshToken());
-        assertNull(response.getBody().getUserDetails());
-
-        verify(passwordResetService).resetPasswordWithTokens(token, newPassword, confirmPassword);
+        verify(passwordResetService).resetPasswordWithTokens("valid-token", "Test@123", "Test@123");
     }
 
     @Test
-    void resetPassword_InvalidToken_ReturnsBadRequest() {
-        String token = "invalid-token";
-        String newPassword = "Test@123";
-        String confirmPassword = "Test@123";
+    void resetPassword_InvalidToken_ReturnsBadRequest() throws Exception {
+        // Arrange
         PasswordResetRequest request = PasswordResetRequest.builder()
-                .token(token)
-                .newPassword(newPassword)
-                .confirmPassword(confirmPassword)
+                .token("invalid-token")
+                .newPassword("Test@123")
+                .confirmPassword("Test@123")
                 .build();
 
-        ResetPasswordResult mockResult = ResetPasswordResult.builder()
+        ResetPasswordResult result = ResetPasswordResult.builder()
                 .success(false)
                 .message("Token inválido ou expirado")
                 .build();
 
-        when(passwordResetService.resetPasswordWithTokens(token, newPassword, confirmPassword))
-                .thenReturn(mockResult);
+        when(passwordResetService.resetPasswordWithTokens("invalid-token", "Test@123", "Test@123"))
+                .thenReturn(result);
 
-        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
+        // Act & Assert
+        mockMvc.perform(post("/api/auth/password-reset/reset")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Token inválido ou expirado"))
+                .andExpect(jsonPath("$.success").value(false));
 
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertFalse(Objects.requireNonNull(response.getBody()).isSuccess());
-        assertEquals("Token inválido ou expirado", response.getBody().getMessage());
-
-        verify(passwordResetService).resetPasswordWithTokens(token, newPassword, confirmPassword);
+        verify(passwordResetService).resetPasswordWithTokens("invalid-token", "Test@123", "Test@123");
     }
 
     @Test
-    void resetPassword_InvalidPassword_ReturnsBadRequest() {
-        String token = "valid-token";
-        String invalidPassword = "weak";
-        String confirmPassword = "weak";
+    void resetPassword_InvalidPassword_ReturnsBadRequest() throws Exception {
+        // Arrange
         PasswordResetRequest request = PasswordResetRequest.builder()
-                .token(token)
-                .newPassword(invalidPassword)
-                .confirmPassword(confirmPassword)
+                .token("valid-token")
+                .newPassword("invalid")
+                .confirmPassword("invalid")
                 .build();
 
-        ResetPasswordResult mockResult = ResetPasswordResult.builder()
+        ResetPasswordResult result = ResetPasswordResult.builder()
                 .success(false)
-                .message("A senha deve ter entre 4 e 8 caracteres")
+                .message("A senha deve conter pelo menos uma letra maiúscula")
                 .build();
 
-        when(passwordResetService.resetPasswordWithTokens(token, invalidPassword, confirmPassword))
-                .thenReturn(mockResult);
+        when(passwordResetService.resetPasswordWithTokens("valid-token", "invalid", "invalid"))
+                .thenReturn(result);
 
-        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
+        // Act & Assert
+        mockMvc.perform(post("/api/auth/password-reset/reset")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("A senha deve conter pelo menos uma letra maiúscula"))
+                .andExpect(jsonPath("$.success").value(false));
 
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertFalse(Objects.requireNonNull(response.getBody()).isSuccess());
-        assertEquals("A senha deve ter entre 4 e 8 caracteres", response.getBody().getMessage());
-
-        verify(passwordResetService).resetPasswordWithTokens(token, invalidPassword, confirmPassword);
+        verify(passwordResetService).resetPasswordWithTokens("valid-token", "invalid", "invalid");
     }
 
     @Test
-    void resetPassword_SamePasswordAsCurrent_ReturnsBadRequest() {
-        String token = "valid-token";
-        String newPassword = "Test@123";
-        String confirmPassword = "Test@123";
+    void resetPassword_InvalidRequest_ReturnsBadRequest() throws Exception {
+        // Arrange
         PasswordResetRequest request = PasswordResetRequest.builder()
-                .token(token)
-                .newPassword(newPassword)
-                .confirmPassword(confirmPassword)
+                .token("") // Invalid empty token
+                .newPassword("Test@123")
+                .confirmPassword("Test@123")
                 .build();
 
-        ResetPasswordResult mockResult = ResetPasswordResult.builder()
-                .success(false)
-                .message("A nova senha não pode ser igual à senha atual")
-                .build();
+        // Act & Assert
+        mockMvc.perform(post("/api/auth/password-reset/reset")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
 
-        when(passwordResetService.resetPasswordWithTokens(token, newPassword, confirmPassword))
-                .thenReturn(mockResult);
-
-        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
-
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertFalse(Objects.requireNonNull(response.getBody()).isSuccess());
-        assertEquals("A nova senha não pode ser igual à senha atual", response.getBody().getMessage());
-
-        verify(passwordResetService).resetPasswordWithTokens(token, newPassword, confirmPassword);
+        verify(passwordResetService, never()).resetPasswordWithTokens(anyString(), anyString(), anyString());
     }
 
     @Test
-    void resetPassword_ServiceThrowsException_ReturnsInternalServerError() {
-        String token = "valid-token";
-        String newPassword = "Test@123";
-        String confirmPassword = "Test@123";
+    void resetPassword_ServiceException_ReturnsInternalServerError() throws Exception {
+        // Arrange
         PasswordResetRequest request = PasswordResetRequest.builder()
-                .token(token)
-                .newPassword(newPassword)
-                .confirmPassword(confirmPassword)
+                .token("valid-token")
+                .newPassword("Test@123")
+                .confirmPassword("Test@123")
                 .build();
 
-        when(passwordResetService.resetPasswordWithTokens(token, newPassword, confirmPassword))
+        when(passwordResetService.resetPasswordWithTokens("valid-token", "Test@123", "Test@123"))
                 .thenThrow(new RuntimeException("Database error"));
 
-        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
+        // Act & Assert
+        mockMvc.perform(post("/api/auth/password-reset/reset")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.message").value("Erro interno do servidor"))
+                .andExpect(jsonPath("$.success").value(false));
 
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
-        assertFalse(Objects.requireNonNull(response.getBody()).isSuccess());
-        assertEquals("Erro interno do servidor", response.getBody().getMessage());
-
-        verify(passwordResetService).resetPasswordWithTokens(token, newPassword, confirmPassword);
+        verify(passwordResetService).resetPasswordWithTokens("valid-token", "Test@123", "Test@123");
     }
 
     @Test
-    void resetPassword_PasswordMismatch_ReturnsBadRequest() {
-        String token = "valid-token";
-        String newPassword = "Test@123";
-        String confirmPassword = "Test@456";
+    void resetPassword_WithAutoLogin_ReturnsTokens() throws Exception {
+        // Arrange
         PasswordResetRequest request = PasswordResetRequest.builder()
-                .token(token)
-                .newPassword(newPassword)
-                .confirmPassword(confirmPassword)
+                .token("valid-token")
+                .newPassword("Test@123")
+                .confirmPassword("Test@123")
                 .build();
 
-        ResetPasswordResult mockResult = ResetPasswordResult.builder()
-                .success(false)
-                .message("As senhas não coincidem")
+        ResetPasswordResult result = ResetPasswordResult.builder()
+                .success(true)
+                .message("Senha redefinida com sucesso")
+                .accessToken("access-token")
+                .refreshToken("refresh-token")
                 .build();
 
-        when(passwordResetService.resetPasswordWithTokens(token, newPassword, confirmPassword))
-                .thenReturn(mockResult);
+        when(passwordResetService.resetPasswordWithTokens("valid-token", "Test@123", "Test@123"))
+                .thenReturn(result);
 
-        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
+        // Act & Assert
+        mockMvc.perform(post("/api/auth/password-reset/reset")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Senha redefinida com sucesso"))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.accessToken").value("access-token"))
+                .andExpect(jsonPath("$.refreshToken").value("refresh-token"));
 
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertFalse(Objects.requireNonNull(response.getBody()).isSuccess());
-        assertEquals("As senhas não coincidem", response.getBody().getMessage());
-
-        verify(passwordResetService).resetPasswordWithTokens(token, newPassword, confirmPassword);
-    }
-
-    @Test
-    void resetPassword_EmptyConfirmPassword_ReturnsBadRequest() {
-        String token = "valid-token";
-        String newPassword = "Test@123";
-        String confirmPassword = "";
-        PasswordResetRequest request = PasswordResetRequest.builder()
-                .token(token)
-                .newPassword(newPassword)
-                .confirmPassword(confirmPassword)
-                .build();
-
-        ResetPasswordResult mockResult = ResetPasswordResult.builder()
-                .success(false)
-                .message("Confirmação de senha é obrigatória")
-                .build();
-
-        when(passwordResetService.resetPasswordWithTokens(token, newPassword, confirmPassword))
-                .thenReturn(mockResult);
-
-        ResponseEntity<PasswordResetResponse> response = passwordResetController.resetPassword(request);
-
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertFalse(Objects.requireNonNull(response.getBody()).isSuccess());
-        assertEquals("Confirmação de senha é obrigatória", response.getBody().getMessage());
-
-        verify(passwordResetService).resetPasswordWithTokens(token, newPassword, confirmPassword);
-    }
-
-    private LoginResponseDTO createMockLoginResponseDTO() {
-        LoginResponseDTO.LoginUserDTO user = LoginResponseDTO.LoginUserDTO.builder()
-                .id(1L)
-                .username("testuser")
-                .roles(List.of("ROLE_USER"))
-                .enabled(true)
-                .build();
-
-        LoginResponseDTO.LoginPermissionDTO permission = LoginResponseDTO.LoginPermissionDTO.builder()
-                .action("read")
-                .subject("user")
-                .build();
-
-        LoginResponseDTO.LoginFunctionalityDTO functionality = LoginResponseDTO.LoginFunctionalityDTO.builder()
-                .name("basic")
-                .build();
-
-        return LoginResponseDTO.builder()
-                .user(user)
-                .permissions(List.of(permission))
-                .functionalities(List.of(functionality))
-                .build();
+        verify(passwordResetService).resetPasswordWithTokens("valid-token", "Test@123", "Test@123");
     }
 }
