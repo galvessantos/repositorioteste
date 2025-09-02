@@ -102,7 +102,7 @@ class PasswordResetControllerUnitTest {
     }
 
     @Test
-    void generatePasswordResetToken_ServiceException_ThrowsException() throws Exception {
+    void generatePasswordResetToken_ServiceException_ReturnsInternalServerError() throws Exception {
         // Arrange
         PasswordResetGenerateRequest request = PasswordResetGenerateRequest.builder()
                 .login("testuser")
@@ -162,7 +162,7 @@ class PasswordResetControllerUnitTest {
     }
 
     @Test
-    void validatePasswordResetToken_ServiceException_ThrowsException() throws Exception {
+    void validatePasswordResetToken_ServiceException_ReturnsInternalServerError() throws Exception {
         // Arrange
         String token = "test-token";
         when(passwordResetService.validatePasswordResetToken(token))
@@ -190,7 +190,7 @@ class PasswordResetControllerUnitTest {
     }
 
     @Test
-    void cleanupExpiredTokens_ServiceException_ThrowsException() throws Exception {
+    void cleanupExpiredTokens_ServiceException_ReturnsInternalServerError() throws Exception {
         // Arrange
         doThrow(new RuntimeException("Database error")).when(passwordResetService).cleanupExpiredTokens();
 
