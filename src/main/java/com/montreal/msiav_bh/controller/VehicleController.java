@@ -2,8 +2,7 @@ package com.montreal.msiav_bh.controller;
 
 import com.montreal.msiav_bh.dto.PageDTO;
 import com.montreal.msiav_bh.dto.VehicleDTO;
-import com.montreal.msiav_bh.dto.response.ContractWithAddressDTO;
-import com.montreal.msiav_bh.dto.response.QueryDetailResponseDTO;
+import com.montreal.msiav_bh.dto.response.ContractDetails;
 import com.montreal.msiav_bh.entity.Address;
 import com.montreal.msiav_bh.entity.Contract;
 import com.montreal.msiav_bh.service.ApiQueryService;
@@ -138,9 +137,10 @@ public class VehicleController {
 
 
     @GetMapping("/search")
-    public ResponseEntity<?> searchAndSaveContract(@RequestParam String placa) {
+    public ResponseEntity<?> searchAndSaveContract(@RequestParam Long id) {
         try {
-            ContractWithAddressDTO response = apiQueryService.searchContract(placa);
+            ContractDetails response = apiQueryService.searchContract(id);
+            // save response in db
             return ResponseEntity.ok(response);
         } catch (HttpClientErrorException.NotFound ex) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -152,40 +152,42 @@ public class VehicleController {
         }
     }
 
+    // outro método para resgatar veiculo detail do
 
-    @GetMapping("/by-plate")
-    public ResponseEntity<Contract> getContractFromDatabase(@RequestParam String placa) {
-        try {
-            Optional<Contract> contract = persistenceService.findContractByPlaca(placa);
-            return contract.map(ResponseEntity::ok)
-                    .orElse(ResponseEntity.notFound().build());
-        } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
-        }
-    }
 
-    @PostMapping("/{licensePlate}/probable-address")
-    public ResponseEntity<Void> saveProbableAddress(
-            @PathVariable String licensePlate,
-            @RequestBody Address address) {
-        apiQueryService.addProbableAddressByPlate(licensePlate, address);
-        return ResponseEntity.ok().build();
-    }
+//    @GetMapping("/by-plate")
+//    public ResponseEntity<Contract> getContractFromDatabase(@RequestParam String placa) {
+//        try {
+//            Optional<Contract> contract = persistenceService.findContractByPlaca(placa);
+//            return contract.map(ResponseEntity::ok)
+//                    .orElse(ResponseEntity.notFound().build());
+//        } catch (Exception e) {
+//            e.printStackTrace();
+//            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+//        }
+//    }
 
-    @PutMapping("/{addressId}/probable-address")
-    public ResponseEntity<Void> updateProbableAddress(
-            @PathVariable Long addressId,
-            @RequestBody Address address) {
-        apiQueryService.updateProbableAddress(addressId, address);
-        return ResponseEntity.ok().build();
-    }
-
-    @DeleteMapping("/{id}/probable-address")
-    public ResponseEntity<Void> deleteProbableAddress(@PathVariable Long id) {
-        apiQueryService.deleteProbableAddress(id);
-        return ResponseEntity.noContent().build();
-    }
+//    @PostMapping("/{licensePlate}/probable-address")
+//    public ResponseEntity<Void> saveProbableAddress(
+//            @PathVariable String licensePlate,
+//            @RequestBody Address address) {
+//        apiQueryService.addProbableAddressByPlate(licensePlate, address);
+//        return ResponseEntity.ok().build();
+//    }
+//
+//    @PutMapping("/{addressId}/probable-address")
+//    public ResponseEntity<Void> updateProbableAddress(
+//            @PathVariable Long addressId,
+//            @RequestBody Address address) {
+//        apiQueryService.updateProbableAddress(addressId, address);
+//        return ResponseEntity.ok().build();
+//    }
+//
+//    @DeleteMapping("/{id}/probable-address")
+//    public ResponseEntity<Void> deleteProbableAddress(@PathVariable Long id) {
+//        apiQueryService.deleteProbableAddress(id);
+//        return ResponseEntity.noContent().build();
+//    }
 
 
     @GetMapping("/health")

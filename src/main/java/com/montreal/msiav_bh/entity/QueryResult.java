@@ -37,7 +37,7 @@ public class QueryResult {
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "vehicle_id", nullable = false)
     @JsonIgnore
-    private VehicleDebug vehicle;
+    private VehicleCache vehicle;
 
 
 }

@@ -4,7 +4,7 @@ import com.montreal.msiav_bh.dto.response.QueryDetailResponseDTO;
 import com.montreal.msiav_bh.entity.*;
 import com.montreal.msiav_bh.enumerations.AgencyType;
 import com.montreal.msiav_bh.repository.AddressRepository;
-import com.montreal.msiav_bh.repository.DebtorDebugRepository;
+import com.montreal.msiav_bh.repository.DebtorRepository;
 import com.montreal.msiav_bh.utils.AddressParser;
 import org.springframework.stereotype.Component;
 
@@ -18,12 +18,12 @@ public class ContractMapper {
 
     private final AddressParser addressParser;
     private final AddressRepository addressRepository;
-    private final DebtorDebugRepository debtorDebugRepository;
+    private final DebtorRepository debtorRepository;
 
-    public ContractMapper(AddressParser addressParser, AddressRepository addressRepository, DebtorDebugRepository debtorDebugRepository) {
+    public ContractMapper(AddressParser addressParser, AddressRepository addressRepository, DebtorRepository debtorRepository) {
         this.addressParser = addressParser;
         this.addressRepository = addressRepository;
-        this.debtorDebugRepository = debtorDebugRepository;
+        this.debtorRepository = debtorRepository;
     }
 
     public Contract toEntity(QueryDetailResponseDTO.Data data) {
@@ -70,13 +70,13 @@ public class ContractMapper {
         }
 
         // Mapear devedores
-        if (data.devedores() != null) {
-            List<DebtorDebug> debtors = data.devedores().stream()
-                    .map(this::toDebtorEntity)
-                    .peek(d -> d.setContrato(contract))
-                    .collect(Collectors.toList());
-            contract.setDevedores(debtors);
-        }
+//        if (data.devedores() != null) {
+//            List<Debtor> debtors = data.devedores().stream()
+//                    .map(this::toDebtorEntity)
+//                    .peek(d -> d.setContrato(contract))
+//                    .collect(Collectors.toList());
+//            contract.setDevedores(debtors);
+//        }
 
         // Mapear garantidores
         if (data.garantidores() != null) {
@@ -87,14 +87,6 @@ public class ContractMapper {
             contract.setGarantidores(guarantors);
         }
 
-        // Mapear veículos
-        if (data.veiculos() != null) {
-            List<VehicleDebug> vehicles = data.veiculos().stream()
-                    .map(this::toVehicleEntity)
-                    .peek(v -> v.setContrato(contract))
-                    .collect(Collectors.toList());
-            contract.setVeiculos(vehicles);
-        }
 
         // Mapear serventia
         if (data.serventia() != null && hasValidNotaryData(data.serventia())) {
@@ -144,21 +136,21 @@ public class ContractMapper {
         return entity;
     }
 
-    private DebtorDebug toDebtorEntity(QueryDetailResponseDTO.Devedor dto) {
+    private Debtor toDebtorEntity(QueryDetailResponseDTO.Devedor dto) {
         if (dto == null || dto.cpfCnpj() == null) {
             return null;
         }
 
         // Verificar se já existe Debtor com esse cpfCnpj
-        Optional<DebtorDebug> existingDebtor = debtorDebugRepository.findByCpfCnpj(dto.cpfCnpj());
+        Optional<Debtor> existingDebtor = debtorRepository.findByCpfCnpj(dto.cpfCnpj());
 
-        DebtorDebug entity;
+        Debtor entity;
         if (existingDebtor.isPresent()) {
             entity = existingDebtor.get();
             // Atualize campos se desejar, por exemplo nome, email, telefone
             entity.setName(dto.nome());
         } else {
-            entity = new DebtorDebug();
+            entity = new Debtor();
             entity.setCpfCnpj(dto.cpfCnpj());
             entity.setName(dto.nome());
         }
@@ -206,44 +198,6 @@ public class ContractMapper {
         return entity;
     }
 
-    private VehicleDebug toVehicleEntity(QueryDetailResponseDTO.Veiculo dto) {
-        VehicleDebug entity = new VehicleDebug();
-        entity.setChassis(dto.chassi());
-        entity.setRenavam(dto.renavam());
-        entity.setGravame(dto.gravame() != null ? dto.gravame().toString() : null);
-        entity.setLicensePlate(dto.placa());
-
-        // Parse marca e modelo
-        if (dto.marcaModelo() != null) {
-            String[] marcaModelo = dto.marcaModelo().split(" - ", 2);
-            if (marcaModelo.length >= 2) {
-                entity.setBrand(marcaModelo[0].trim());
-                entity.setModel(marcaModelo[1].trim());
-            } else {
-                entity.setBrand(dto.marcaModelo());
-                entity.setModel("");
-            }
-        }
-
-        entity.setColor(dto.cor());
-        entity.setDetranRegistration(dto.registroDetran());
-        entity.setHasGPS(dto.possuiGps() != null ? Boolean.parseBoolean(dto.possuiGps()) : null);
-        entity.setRegistrationState(dto.ufEmplacamento());
-
-        // Parse anos
-        try {
-            if (dto.anoFabricacao() != null) {
-                entity.setManufactureYear(Integer.parseInt(dto.anoFabricacao()));
-            }
-            if (dto.anoModelo() != null) {
-                entity.setModelYear(Integer.parseInt(dto.anoModelo()));
-            }
-        } catch (NumberFormatException e) {
-            // Ignorar erros de parse de ano
-        }
-
-        return entity;
-    }
 
     private Notary toNotaryEntity(QueryDetailResponseDTO.Serventia dto) {
         Notary entity = new Notary();

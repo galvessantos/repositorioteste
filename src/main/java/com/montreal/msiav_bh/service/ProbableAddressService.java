@@ -3,6 +3,8 @@ package com.montreal.msiav_bh.service;
 import java.util.List;
 import java.util.Optional;
 
+import com.montreal.msiav_bh.entity.VehicleCache;
+import com.montreal.msiav_bh.repository.VehicleCacheRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,7 +34,7 @@ public class ProbableAddressService {
 
     private final ProbableAddressMapper mapper;
     private final AddressMapper addressMapper;
-    private final VehicleRepository vehicleRepository;
+    private final VehicleCacheRepository vehicleRepository;
     private final ProbableAddressRepository repository;
     private final AddressRepository addressRepository;
 
@@ -41,7 +43,7 @@ public class ProbableAddressService {
         try {
             log.info("Salvando endereço provável para veículo ID: {}", request.getVehicleId());
 
-            Vehicle vehicle = vehicleRepository.findById(request.getVehicleId())
+            VehicleCache vehicle = vehicleRepository.findById(request.getVehicleId())
                     .orElseThrow(() -> new NotFoundException("Veículo não encontrado com ID: " + request.getVehicleId()));
 
             Address newAddress = addressMapper.toEntity(request.getAddress());
@@ -133,19 +135,26 @@ public class ProbableAddressService {
             throw new InternalErrorException("Erro ao atualizar endereço provável", e);
         }
     }
-    
-    public List<AddressResponse> findByVehicleId(Long vehicleId) {
+
+    public List<ProbableAddressResponse> findByVehicleId(Long vehicleId) {
         try {
             log.info("Buscando endereços para o veículo ID: {}", vehicleId);
+
             return repository.findAllByVehicleId(vehicleId).stream()
-                    .map(pa -> addressMapper.toResponse(pa.getAddress()))
+                    .map(pa -> ProbableAddressResponse.builder()
+                            .id(pa.getId()) // id do ProbableAddress
+                            .vehicleId(pa.getVehicle().getId()) // id do veículo
+                            .address(addressMapper.toResponse(pa.getAddress())) // dto do endereço
+                            .build())
                     .toList();
+
         } catch (Exception e) {
             log.error("Erro ao buscar endereços DTO para o veículo ID {}: {}", vehicleId, e);
             throw new InternalErrorException("Erro ao buscar endereços prováveis do veículo.");
         }
     }
-    
+
+
     @Transactional
     public void deleteByVehicleIdAndAddressId(Long vehicleId, Long addressId) {
         try {

@@ -7,7 +7,6 @@ import com.montreal.msiav_bh.enumerations.FuelTypeEnum;
 import com.montreal.msiav_bh.enumerations.VehicleStageEnum;
 import com.montreal.msiav_bh.enumerations.VehicleStatusEnum;
 
-import jakarta.validation.constraints.FutureOrPresent;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.PastOrPresent;
 import lombok.AllArgsConstructor;

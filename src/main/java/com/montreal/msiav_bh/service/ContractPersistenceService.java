@@ -23,6 +23,8 @@ public class ContractPersistenceService {
         this.contractMapper = contractMapper;
     }
 
+
+
     public Contract saveContract(QueryDetailResponseDTO response) {
         if (response == null || !response.success() || response.data() == null) {
             throw new IllegalArgumentException("Resposta inválida da API");
@@ -49,38 +51,5 @@ public class ContractPersistenceService {
         return contractRepository.save(contract);
     }
 
-    @Transactional
-    public Optional<Contract> findContractByPlaca(String placa) {
-        List<Contract> contracts = contractRepository.findByVeiculosLicensePlate(placa);
 
-        if (contracts.isEmpty()) {
-            return Optional.empty();
-        }
-
-        Contract contract = contracts.get(0);
-
-        // Forçar carregamento das coleções lazy
-        contract.getDevedores().size();
-        contract.getVeiculos().size();
-        contract.getGarantidores().size();
-        contract.getOrgaos().size();
-        contract.getNotificacoes().size();
-
-        if (contract.getCredor() != null) {
-            contract.getCredor().getId();
-        }
-        if (contract.getServentia() != null) {
-            contract.getServentia().getId();
-        }
-        if (contract.getDetran() != null) {
-            contract.getDetran().getId();
-        }
-
-        return Optional.of(contract);
-    }
-
-
-    public List<Contract> findAllContractsByPlaca(String placa) {
-        return contractRepository.findByVeiculosLicensePlate(placa);
-    }
 }

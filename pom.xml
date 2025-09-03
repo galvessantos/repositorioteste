@@ -180,19 +180,25 @@
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
-        
+
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- PDF -->
         <dependency>
 		    <groupId>org.apache.pdfbox</groupId>
 		    <artifactId>pdfbox</artifactId>
 		    <version>2.0.29</version>
 		</dependency>
-		
+
 		<dependency>
 		    <groupId>org.thymeleaf</groupId>
 		    <artifactId>thymeleaf</artifactId>
 		</dependency>
-		
+
 		<dependency>
 		    <groupId>org.xhtmlrenderer</groupId>
 		    <artifactId>flying-saucer-pdf</artifactId>
@@ -204,12 +210,12 @@
 		    <artifactId>spring-boot-admin-starter-client</artifactId>
 		    <version>3.3.5</version>
 		</dependency>
-		
+
 		<dependency>
 		    <groupId>org.springframework.boot</groupId>
 		    <artifactId>spring-boot-starter-actuator</artifactId>
 		</dependency>
-		
+
 		<dependency>
 		    <groupId>io.micrometer</groupId>
 		    <artifactId>micrometer-registry-prometheus</artifactId>
@@ -220,7 +226,7 @@
             <artifactId>tika-core</artifactId>
             <version>3.1.0</version>
         </dependency>
-			
+
 		<dependency>
 		    <groupId>org.springframework.boot</groupId>
 		    <artifactId>spring-boot-starter-jdbc</artifactId>
@@ -252,7 +258,7 @@
         </dependency>
 
     </dependencies>
-    
+
     <profiles>
         <profile>
             <id>training</id>

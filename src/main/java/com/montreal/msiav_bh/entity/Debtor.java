@@ -1,5 +1,6 @@
 package com.montreal.msiav_bh.entity;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
 import com.montreal.core.utils.CryptoUtil;
 import jakarta.persistence.*;
 import lombok.*;
@@ -36,6 +37,11 @@ public class Debtor {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
+
+    @ManyToOne
+    @JoinColumn(name = "contrato_id")
+    @JsonBackReference
+    private Contract contrato;
 
     @PrePersist
     public void prePersist() {

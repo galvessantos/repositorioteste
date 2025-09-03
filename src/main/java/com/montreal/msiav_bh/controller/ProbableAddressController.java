@@ -80,7 +80,7 @@ public class ProbableAddressController {
     public ResponseEntity<?> findByVehicleId(@PathVariable Long vehicleId) {
         log.info("Buscando endereços prováveis para o veículo ID: {}", vehicleId);
         try {
-            List<AddressResponse> list = probableAddressService.findByVehicleId(vehicleId);
+            List<ProbableAddressResponse> list = probableAddressService.findByVehicleId(vehicleId);
             return ResponseEntity.ok(list);
         } catch (InvalidParameterException | NotFoundException e) {
             log.warn("Erro de validação ao buscar endereços prováveis: {}", e.getMessage());

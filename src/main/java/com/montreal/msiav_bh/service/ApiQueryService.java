@@ -1,26 +1,19 @@
 package com.montreal.msiav_bh.service;
 
-import com.montreal.core.utils.CryptoUtil;
-import com.montreal.core.utils.PostgresCryptoUtil;
 import com.montreal.msiav_bh.config.ApiQueryConfig;
 import com.montreal.msiav_bh.dto.request.ConsultaAuthRequestDTO;
 import com.montreal.msiav_bh.dto.response.ConsultaAuthResponseDTO;
 import com.montreal.msiav_bh.dto.response.ConsultaNotificationResponseDTO;
-import com.montreal.msiav_bh.dto.response.ContractWithAddressDTO;
+import com.montreal.msiav_bh.dto.response.ContractDetails;
 import com.montreal.msiav_bh.dto.response.QueryDetailResponseDTO;
 import com.montreal.msiav_bh.entity.*;
-import com.montreal.msiav_bh.repository.ProbableAddressDebugRepository;
 import com.montreal.msiav_bh.repository.QueryResultRepository;
 import com.montreal.msiav_bh.repository.VehicleCacheRepository;
-import com.montreal.msiav_bh.repository.VehicleDebugRepository;
-import jakarta.persistence.EntityNotFoundException;
 import jakarta.transaction.Transactional;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
@@ -44,15 +37,15 @@ public class ApiQueryService {
     @Autowired
     private ContractPersistenceService persistenceService;
     @Autowired
-    private ProbableAddressDebugRepository probableAddressDebugRepository;
-    @Autowired
-    private VehicleDebugRepository vehicleDebugRepository;
+    private ProbableAddressService probableAddressService;
     @Autowired
     private QueryResultRepository queryResultRepository;
     @Autowired
     private VehicleCacheRepository vehicleCacheRepository;
     @Autowired
     private VehicleCacheCryptoService vehicleCacheCryptoService;
+
+    private final VehicleCacheCryptoService cryptoService;
 
     private String currentToken;
     private LocalDateTime tokenExpiration;
@@ -62,6 +55,10 @@ public class ApiQueryService {
     private volatile LocalDateTime lastAuthAttempt = null;
     private static final int MAX_AUTH_RETRIES = 3;
     private static final int AUTH_RETRY_DELAY_MINUTES = 5;
+
+    public ApiQueryService(VehicleCacheCryptoService cryptoService) {
+        this.cryptoService = cryptoService;
+    }
 
     public String authenticate() {
         return authenticateWithRetry(false);
@@ -245,23 +242,19 @@ public class ApiQueryService {
     }
 
     @Transactional
-    public ContractWithAddressDTO searchContract(String placa) {
-        log.info("Iniciando busca de contrato para placa: {}", placa);
+    public ContractDetails searchContract(Long id) {
 
-        QueryDetailResponseDTO response = doSearchContract(placa);
+        Optional<VehicleCache> vehicle = vehicleCacheRepository.findById(id);
+
+        QueryDetailResponseDTO response = doSearchContract(cryptoService.decryptPlaca(vehicle.get().getPlaca()));
         log.debug("API externa executada com sucesso");
 
 
-        List<ProbableAddressDebug> probableAddresses = probableAddressDebugRepository
-                .findByLicensePlate(placa);
-        log.debug("Encontrados {} endereços prováveis", probableAddresses.size());
 
+        QueryResult queryResult = buildQueryResultFromCache(vehicle);
 
-        QueryResult queryResult = buildQueryResult(placa);
-
-        ContractWithAddressDTO contractWithAddressDTO = ContractWithAddressDTO.builder()
+        ContractDetails contractWithAddressDTO = ContractDetails.builder()
                 .dadosApi(response)
-                .probableAddress(probableAddresses)
                 .queryResult(queryResult)
                 .build();
 
@@ -270,10 +263,7 @@ public class ApiQueryService {
     }
 
 
-
-
-
-    private QueryDetailResponseDTO doSearchContract(String placa) {
+    public QueryDetailResponseDTO doSearchContract(String placa) {
         String url = config.getBaseUrl() + "/api/recepcaoContrato/receber";
         String token = authenticate();
 
@@ -292,116 +282,30 @@ public class ApiQueryService {
         return response.getBody();
 }
 
+    private QueryResult buildQueryResultFromCache(Optional<VehicleCache> vehicleCache) {
+        VehicleCache cache = vehicleCache.orElseThrow(() ->
+                new IllegalArgumentException("Vehicle não encontrado")
+        );
 
-    private QueryResult buildQueryResult(String placa) {
-        log.debug("Buscando dados do vehicle_cache para placa: {}", placa);
-
-        if (placa == null || placa.trim().isEmpty()) {
-            log.warn("Placa é nula ou vazia");
-            return null;
-        }
-
-        String placaNormalizada = placa.trim().toUpperCase();
-
-        try {
-
-            Optional<VehicleCache> directResult = vehicleCacheRepository.findByPlaca(placaNormalizada);
-            if (directResult.isPresent()) {
-                return buildQueryResultFromCache(directResult.get());
-            }
-
-
-            String placaCriptografada = vehicleCacheCryptoService.encryptPlaca(placaNormalizada);
-            Optional<VehicleCache> encryptedResult = vehicleCacheRepository.findByPlaca(placaCriptografada);
-            if (encryptedResult.isPresent()) {
-                return buildQueryResultFromCache(encryptedResult.get());
-            }
-
-
-            log.warn("Nenhum registro encontrado para placa '{}'. Verificando últimos registros...", placaNormalizada);
-            List<VehicleCache> recentVehicles = vehicleCacheRepository.findAll(
-                    PageRequest.of(0, 20, Sort.by(Sort.Direction.DESC, "id"))
-            ).getContent();
-
-            for (VehicleCache vehicle : recentVehicles) {
-                try {
-                    String placaDescriptografada = vehicleCacheCryptoService.decryptPlaca(vehicle.getPlaca());
-                    if (placaNormalizada.equals(placaDescriptografada)) {
-                        log.info("Registro encontrado por comparação manual - ID: {}", vehicle.getId());
-                        return buildQueryResultFromCache(vehicle);
-                    }
-                } catch (Exception e) {
-                    log.debug("Erro ao descriptografar placa do registro ID {}: {}", vehicle.getId(), e.getMessage());
-                }
-            }
-
-            log.warn("Nenhum registro correspondente encontrado no vehicle_cache para a placa: {}", placaNormalizada);
-            return null;
-
-        } catch (Exception e) {
-            log.error("Erro ao buscar dados do vehicle_cache para a placa: {}", placa, e);
-            return null;
-        }
-    }
-
-    private QueryResult buildQueryResultFromCache(VehicleCache vehicleCache) {
         QueryResult queryResult = new QueryResult();
 
-
-        queryResult.setEtapaAtual(vehicleCache.getEtapaAtual());
-        queryResult.setStatusApreensao(vehicleCache.getStatusApreensao());
-        queryResult.setDataUltimaMovimentacao(vehicleCache.getUltimaMovimentacao());
+        queryResult.setEtapaAtual(cache.getEtapaAtual());
+        queryResult.setStatusApreensao(cache.getStatusApreensao());
+        queryResult.setDataUltimaMovimentacao(cache.getUltimaMovimentacao());
         queryResult.setDataHoraApreensao(LocalDateTime.now());
 
-
         Address address = new Address();
-        address.setCity(vehicleCache.getCidade());
-        address.setState(vehicleCache.getUf());
+        address.setCity(cache.getCidade());
+        address.setState(cache.getUf());
         queryResult.setAddress(address);
-
-
-        VehicleDebug vehicleDebug = createOrUpdateVehicleDebug(vehicleCache);
-        queryResult.setVehicle(vehicleDebug);
 
         log.debug("QueryResult criado com sucesso - Etapa: {}, Status: {}, Veículo ID: {}",
                 queryResult.getEtapaAtual(),
                 queryResult.getStatusApreensao(),
-                vehicleDebug.getId());
+                cache.getId());
 
         return queryResult;
     }
-
-    private VehicleDebug createOrUpdateVehicleDebug(VehicleCache vehicleCache) {
-
-        Optional<VehicleDebug> existingVehicle = vehicleDebugRepository.findByLicensePlate(vehicleCache.getPlaca());
-
-        VehicleDebug vehicleDebug;
-
-        if (existingVehicle.isPresent()) {
-            vehicleDebug = existingVehicle.get();
-            log.debug("Utilizando VehicleDebug existente - ID: {}", vehicleDebug.getId());
-        } else {
-            vehicleDebug = new VehicleDebug();
-            log.debug("Criando novo VehicleDebug");
-        }
-
-
-        try {
-            String placaDescriptografada = vehicleCacheCryptoService.decryptPlaca(vehicleCache.getPlaca());
-            vehicleDebug.setLicensePlate(placaDescriptografada);
-        } catch (Exception e) {
-            log.error("Erro ao descriptografar placa para VehicleDebug: {}", e.getMessage());
-            vehicleDebug.setLicensePlate(vehicleCache.getPlaca());
-        }
-
-//        vehicleDebug.setModel(vehicleCache.getModelo());
-//        vehicleDebug.setContractNumber(vehicleCache.getContrato());
-//        vehicleDebug.setProtocol(vehicleCache.getProtocolo());
-//        // Outros campos conforme necessário
-
-        return vehicleDebugRepository.save(vehicleDebug);
-    }
-
 
 
 
@@ -475,47 +379,5 @@ public class ApiQueryService {
             return "Token válido por mais " + minutesUntilExpiration + " minutos";
         }
     }
-
-    @Transactional
-    public void addProbableAddressByPlate(String licensePlate, Address address) {
-        address.setId(null); // garante novo endereço
-
-        ProbableAddressDebug probableAddress = ProbableAddressDebug.builder()
-                .licensePlate(licensePlate)
-                .address(address)
-                .build();
-
-        probableAddressDebugRepository.save(probableAddress);
-    }
-
-
-    @Transactional
-    public void updateProbableAddress(Long probableAddressId, Address newAddressData) {
-        ProbableAddressDebug probableAddress = probableAddressDebugRepository.findById(probableAddressId)
-                .orElseThrow(() -> new EntityNotFoundException("Endereço provável não encontrado com id: " + probableAddressId));
-
-        Address existingAddress = probableAddress.getAddress();
-
-        existingAddress.setPostalCode(newAddressData.getPostalCode());
-        existingAddress.setStreet(newAddressData.getStreet());
-        existingAddress.setNumber(newAddressData.getNumber());
-        existingAddress.setNeighborhood(newAddressData.getNeighborhood());
-        existingAddress.setComplement(newAddressData.getComplement());
-        existingAddress.setState(newAddressData.getState());
-        existingAddress.setCity(newAddressData.getCity());
-        existingAddress.setNote(newAddressData.getNote());
-
-        probableAddressDebugRepository.save(probableAddress);
-    }
-
-
-    @Transactional
-    public void deleteProbableAddress(Long probableAddressId) {
-        ProbableAddressDebug probableAddress = probableAddressDebugRepository.findById(probableAddressId)
-                .orElseThrow(() -> new EntityNotFoundException("Endereço provável não encontrado com id: " + probableAddressId));
-
-        probableAddressDebugRepository.delete(probableAddress);
-    }
-
 
 }

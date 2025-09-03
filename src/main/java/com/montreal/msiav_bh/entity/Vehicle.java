@@ -29,18 +29,18 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @Entity
 @Table(name = "vehicle",
-       uniqueConstraints = {
-           @UniqueConstraint(name = "licensePlate_contractNumber_idx", columnNames = {"license_plate", "contract_number"}),
-           @UniqueConstraint(name = "unique_renavam", columnNames = {"renavam"}),
-           @UniqueConstraint(name = "unique_chassis", columnNames = {"chassis"})
-       })
+        uniqueConstraints = {
+                @UniqueConstraint(name = "licensePlate_contractNumber_idx", columnNames = {"license_plate", "contract_number"}),
+                @UniqueConstraint(name = "unique_renavam", columnNames = {"renavam"}),
+                @UniqueConstraint(name = "unique_chassi", columnNames = {"chassi"})
+        })
 public class Vehicle {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "license_plate", nullable = false, unique = true, length = 15)
+    @Column(name = "license_plate", nullable = false, length = 15)
     private String licensePlate;
 
     @Column(name = "brand", nullable = false, length = 50)
@@ -70,10 +70,10 @@ public class Vehicle {
     @Column(name = "contract_number", nullable = false, length = 50)
     private String contractNumber;
 
-    @Column(name = "renavam", nullable = true, unique = true, length = 9)
+    @Column(name = "renavam", nullable = true, length = 9)
     private String renavam;
 
-    @Column(name = "chassi", nullable = true, unique = true, length = 17)
+    @Column(name = "chassi", nullable = true, length = 17)
     private String chassi;
 
     @Column(name = "color", nullable = true, length = 30)

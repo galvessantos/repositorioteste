@@ -1,8 +1,6 @@
 package com.montreal.msiav_bh.dto.response;
 
-import com.montreal.msiav_bh.dto.QueryResultDTO;
-import com.montreal.msiav_bh.dto.response.QueryDetailResponseDTO;
-import com.montreal.msiav_bh.entity.ProbableAddressDebug;
+import com.montreal.msiav_bh.entity.ProbableAddress;
 import com.montreal.msiav_bh.entity.QueryResult;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -15,8 +13,8 @@ import java.util.List;
 @AllArgsConstructor
 @NoArgsConstructor
 @Builder
-public class ContractWithAddressDTO {
+public class ContractDetails {
     private QueryDetailResponseDTO dadosApi;
-    private List<ProbableAddressDebug> probableAddress;
+    private List<ProbableAddress> probableAddress;
     private QueryResult queryResult;
 }

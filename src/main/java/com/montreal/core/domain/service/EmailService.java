@@ -33,14 +33,49 @@ public class EmailService {
     private final UiHubProperties uiHubProperties;
 
     public void sendPasswordResetEmail(String to, String token) {
-        String resetUrl = "http://localhost:8082/api/v1/auth/reset-password?token=" + token;
+        log.info("Iniciando envio de e-mail de redefinição de senha para {}", to);
+        try {
+            String resetUrl = uiHubProperties.getUrl() + "auth/reset-password?token=" + token;
 
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setTo(to);
-        message.setSubject("Redefinição de Senha");
-        message.setText("Para redefinir sua senha, clique no link abaixo:\n" + resetUrl);
+            String emailBodyAsHtml = """
+                    <html lang="pt-BR">
+                    <body>
+                    <pre style="font-family: sans-serif; font-size: 14px;">
+                    Prezado(a) Cliente,
 
-        mailSender.send(message);
+                    Para trocar a senha da conta de rede favor acessar o portal abaixo seguindo as seguintes orientações:
+                    - Mantenha a confidencialidade, garantindo que ela não seja divulgada, incluindo a autoridades e lideranças.
+                    - Não compartilhe a sua senha. Ela é individual e intransferível.
+                    - Não anote ou salve sua senha em nenhuma circunstância. Acessos indevidos, serão de sua responsabilidade.
+                    - Altere a senha sempre que existir qualquer indicação de possível comprometimento da confidencialidade.
+
+                    Escolha senhas que contenham no mínimo 03 dos 4 requisitos abaixo:
+                    - 01 caractere especial ( * %% $ # @ ! & )
+                    - 01 numeral
+                    - Letras maiúsculas e minúsculas
+                    - Mínimo de 8 caracteres.
+
+                    Click no link abaixo para ser redirecionado para a tela de redefinição de senha:
+                    👉 <a href="%s">%s</a>
+
+                    Muito obrigado,
+
+                    InfraTI - MIBH
+                    MIBH Suporte N1
+                    </pre>
+                    </body>
+                    </html>
+                    """.formatted(resetUrl, resetUrl);
+
+            var digitalSendRequest = sgdBrokerComponent.createTypeEmail("Redefinição de Senha", emailBodyAsHtml, to);
+            var digitalSendResponse = sgdBrokerService.sendNotification(digitalSendRequest);
+            log.info("E-mail de redefinição de senha enviado com sucesso para {} - código envio: {}", to, digitalSendResponse.getSendId());
+
+        } catch (ClientServiceException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new EmailException("Erro ao enviar e-mail de redefinição de senha", e);
+        }
     }
 
     public String getTamplate(String templateName, String name, String link) {

@@ -30,7 +30,7 @@ public class ProbableAddress {
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "vehicle_id", nullable = false, foreignKey = @ForeignKey(name = "fk_probable_vehicle"))
-    private Vehicle vehicle;
+    private VehicleCache vehicle;
 
     @OneToOne(cascade = CascadeType.ALL, orphanRemoval = true)
     @JoinColumn(name = "address_id", nullable = false)

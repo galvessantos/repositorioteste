@@ -23,6 +23,7 @@ public class Notification {
     private LocalDate readDate;
 
     @Lob
+    @Basic(fetch = FetchType.EAGER)
     @Column(name = "evidence_file", columnDefinition = "TEXT")
     private String evidenceFileBase64;
 

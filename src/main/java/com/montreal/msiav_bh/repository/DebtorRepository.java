@@ -10,6 +10,8 @@ import org.springframework.stereotype.Repository;
 import com.montreal.msiav_bh.entity.Debtor;
 import com.montreal.msiav_bh.repository.custom.DebtorRepositoryCustom;
 
+import java.util.Optional;
+
 @Repository
 public interface DebtorRepository extends JpaRepository<Debtor, Long>, DebtorRepositoryCustom {
 
@@ -28,4 +30,6 @@ public interface DebtorRepository extends JpaRepository<Debtor, Long>, DebtorRep
             @Param("fieldName") String fieldName,
             @Param("fieldValue") String fieldValue,
             Pageable pageable);
+
+    Optional<Debtor> findByCpfCnpj(String s);
 }

@@ -1,5 +1,6 @@
 package com.montreal.msiav_bh.entity;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
@@ -98,4 +99,36 @@ public class VehicleCache {
 
     @Column(name = "contrato_placa_hash", length = 64)
     private String contratoPlacaHash;
+
+    @Column(name = "marca_modelo")
+    private String marcaModelo;
+
+    @Column(name = "registro_detran")
+    private String registroDetran;
+
+    @Column(name = "possui_gps")
+    private Boolean possuiGPS;
+
+    @Column(name = "ano_fabricacao")
+    private String anoFabricacao;
+
+    @Column(name = "ano_modelo")
+    private String anoModelo;
+
+    @Column(name = "cor")
+    private String cor;
+
+    @Column(name = "chassi")
+    private String chassi;
+
+    @Column(name = "renavam")
+    private String renavam;
+
+    @Column(name = "gravame")
+    private String gravame;
+
+    @ManyToOne
+    @JoinColumn(name = "contrato_entity_id")
+    @JsonBackReference
+    private Contract contratoEntity;
 }

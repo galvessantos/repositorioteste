@@ -57,6 +57,7 @@ public class Contract {
     private String taxaJuros;
 
     @Lob
+    @Basic(fetch = FetchType.EAGER)
     @Column(name = "certidao_busca_apreensao", columnDefinition = "TEXT")
     private String certidaoBuscaApreensao;
 
@@ -103,9 +104,9 @@ public class Contract {
     @JsonManagedReference
     private List<Guarantors> garantidores = new ArrayList<>();
 
-    @OneToMany(mappedBy = "contrato", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @OneToMany(mappedBy = "contratoEntity", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     @JsonManagedReference
-    private List<VehicleDebug> veiculos = new ArrayList<>();
+    private List<VehicleCache> veiculos = new ArrayList<>();
 
     @OneToOne(mappedBy = "contrato", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     @JsonManagedReference

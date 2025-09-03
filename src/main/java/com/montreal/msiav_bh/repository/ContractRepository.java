@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Optional;
 
 public interface ContractRepository extends JpaRepository<Contract, Long> {
-    List<Contract> findByVeiculosLicensePlate(String placa);
 
     Optional<Contract> findByNumero(String numero);
 }
